@@ -39,6 +39,7 @@ const LEAGUE = {
   homeGoalBoost: 1.08,
   awayGoalDrag: 0.95,
   totalGoalsLine: 2.5,
+  totalCornersLine: 8.5,
 };
 
 const state = {
@@ -185,6 +186,20 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
   });
 
   const matrix = calcularMatrizPoisson(homeGoals, awayGoals, LEAGUE.totalGoalsLine);
+  const homeCorners = proyectarCornersEquipo({
+    attack: homeAttack,
+    opponentDefense: awayDefense,
+    form: homeForm,
+    isHome: true,
+  });
+  const awayCorners = proyectarCornersEquipo({
+    attack: awayAttack,
+    opponentDefense: homeDefense,
+    form: awayForm,
+    isHome: false,
+  });
+  const totalCorners = round1(homeCorners + awayCorners);
+  const cornersMatrix = calcularTotalPoisson(totalCorners, LEAGUE.totalCornersLine);
   const probability = calcularProbabilidadGanador({
     homeGoals,
     awayGoals,
@@ -197,6 +212,7 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
   const diff = round1(homeGoals - awayGoals);
   const totalLean = matrix.overProb >= matrix.underProb ? "Over 2.5 goles" : "Under 2.5 goles";
   const bttsLean = matrix.bttsProb >= 0.52 ? "Ambos anotan: Si" : "Ambos anotan: No";
+  const cornersLean = cornersMatrix.overProb >= cornersMatrix.underProb ? "Over 8.5 corners" : "Under 8.5 corners";
 
   return {
     game,
@@ -215,12 +231,17 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
     homeGoals,
     awayGoals,
     totalGoals,
+    homeCorners,
+    awayCorners,
+    totalCorners,
+    cornersMatrix,
     matrix,
     probability,
     favorite,
     diff,
     totalLean,
     bttsLean,
+    cornersLean,
     confidence: calcularConfianza({ diff: Math.abs(diff), winProbability: probability.value, homeScore: probability.homeComposite, awayScore: probability.awayComposite }),
     sources: buildSources(game, summary),
   };
@@ -300,6 +321,16 @@ function proyectarGolesEquipo({ ownContext, opponentContext, attack, opponentDef
   return round2(clamp(baseExpected * attackFactor * defenseFactor * formFactor * matchupFactor * fieldFactor, 0.25, 3.8));
 }
 
+function proyectarCornersEquipo({ attack, opponentDefense, form, isHome }) {
+  const baseCorners = fallback(attack?.corners, LEAGUE.cornersPerTeam);
+  const shotVolumeFactor = 0.88 + normalizeHigher(attack?.shots, 7.0, 16.8) * 0.24;
+  const pressureFactor = 0.92 + normalizeHigher(attack?.shotsOnTarget, 2.1, 6.4) * 0.16;
+  const opponentBlockFactor = 0.94 + (1 - numberOr(opponentDefense?.score, 0.5)) * 0.14;
+  const formFactor = 0.95 + numberOr(form?.score, 0.5) * 0.10;
+  const fieldFactor = isHome ? 1.04 : 0.97;
+  return round2(clamp(baseCorners * shotVolumeFactor * pressureFactor * opponentBlockFactor * formFactor * fieldFactor, 2.0, 8.5));
+}
+
 function calcularProbabilidadGanador({ homeGoals, awayGoals, homeScores, awayScores, matrix }) {
   const weights = { attack: 0.3, defense: 0.25, form: 0.2, localia: 0.1, matchup: 0.15 };
   const homeComposite = weightedTeamScore(homeScores, weights);
@@ -361,6 +392,27 @@ function calcularMatrizPoisson(homeGoals, awayGoals, totalLine = 2.5) {
     underProb: clamp(1 - overProb / totalMass, 0, 1),
     bttsProb: clamp(bttsProb / totalMass, 0, 1),
     topScores,
+  };
+}
+
+function calcularTotalPoisson(lambda, totalLine = 8.5) {
+  const maxCount = 24;
+  let overProb = 0;
+  let underProb = 0;
+  const topCounts = [];
+
+  for (let count = 0; count <= maxCount; count++) {
+    const p = poissonProbability(count, lambda);
+    topCounts.push({ count, p });
+    if (count > totalLine) overProb += p;
+    else underProb += p;
+  }
+
+  const totalMass = overProb + underProb || 1;
+  return {
+    overProb: clamp(overProb / totalMass, 0, 1),
+    underProb: clamp(underProb / totalMass, 0, 1),
+    topCounts: topCounts.sort((a, b) => b.p - a.p).slice(0, 4),
   };
 }
 
@@ -691,6 +743,7 @@ function renderSummary(model) {
     ["Favorito", model.favorite, `${Math.round(p.value * 100)}%`],
     ["Goles esperados", `${model.awayGoals.toFixed(2)} - ${model.homeGoals.toFixed(2)}`, `Total ${model.totalGoals}`],
     ["Over/Under", model.totalLean, `${Math.round(Math.max(model.matrix.overProb, model.matrix.underProb) * 100)}%`],
+    ["Corners", model.cornersLean, `Total ${model.totalCorners}`],
     ["BTTS", model.bttsLean, `${Math.round(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb) * 100)}%`],
   ];
   els.summaryGrid.innerHTML = cards.map(([label, value, meta]) => `
@@ -705,13 +758,13 @@ function renderSummary(model) {
 function renderTeams(model) {
   els.teamGrid.innerHTML = `
     <div class="grid gap-5 xl:grid-cols-2">
-      ${renderTeamCard(model.awayContext, model.awayAttack, model.awayDefense, model.awayForm, model.awayMatchup, model.awayGoals, false)}
-      ${renderTeamCard(model.homeContext, model.homeAttack, model.homeDefense, model.homeForm, model.homeMatchup, model.homeGoals, true)}
+      ${renderTeamCard(model.awayContext, model.awayAttack, model.awayDefense, model.awayForm, model.awayMatchup, model.awayGoals, model.awayCorners, false)}
+      ${renderTeamCard(model.homeContext, model.homeAttack, model.homeDefense, model.homeForm, model.homeMatchup, model.homeGoals, model.homeCorners, true)}
     </div>
   `;
 }
 
-function renderTeamCard(context, attack, defense, form, matchup, goals, isHome) {
+function renderTeamCard(context, attack, defense, form, matchup, goals, corners, isHome) {
   return `
     <article class="rounded-lg border border-slate-200 bg-white p-4 shadow-panel">
       <div class="flex items-center gap-3 border-b border-slate-100 pb-4">
@@ -726,6 +779,7 @@ function renderTeamCard(context, attack, defense, form, matchup, goals, isHome) 
         ${metricBlock("Defensa", defense.label, scorePercent(defense.score), "GA " + round2(defense.goalsAgainst))}
         ${metricBlock("Forma", form.label, scorePercent(form.score), "PPG " + round2(context.pointsPerGame))}
         ${metricBlock("Matchup", matchup.label, scorePercent(matchup.score), "xG " + goals.toFixed(2))}
+        ${metricBlock("Corners", corners.toFixed(2), "xC", "Base " + round2(attack.corners))}
       </div>
     </article>
   `;
@@ -736,6 +790,7 @@ function renderResults(model) {
   const rows = [
     ["Ganador", model.favorite, `${Math.round(p.value * 100)}%`, model.confidence, `Local ${pct(p.homeProb)} | Empate ${pct(p.drawProb)} | Visita ${pct(p.awayProb)}`],
     ["Total goles", model.totalLean, model.totalGoals.toFixed(1), confidenceFromProb(Math.max(model.matrix.overProb, model.matrix.underProb)), `Over ${pct(model.matrix.overProb)} | Under ${pct(model.matrix.underProb)}`],
+    ["Total corners", model.cornersLean, model.totalCorners.toFixed(1), confidenceFromProb(Math.max(model.cornersMatrix.overProb, model.cornersMatrix.underProb)), `Over ${pct(model.cornersMatrix.overProb)} | Under ${pct(model.cornersMatrix.underProb)}`],
     ["Ambos anotan", model.bttsLean, pct(model.matrix.bttsProb), confidenceFromProb(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb)), "Poisson con goles esperados de ambos equipos"],
     ["Marcador probable", model.matrix.topScores.map((s) => `${s.a}-${s.h}`).join(" / "), `${model.awayGoals.toFixed(2)}-${model.homeGoals.toFixed(2)}`, "Media", "Marcadores ordenados por probabilidad"],
   ];
@@ -756,6 +811,7 @@ function renderFormula(model) {
     ataque 30%, defensa 25%, forma 20%, localia 10% y matchup 15%.
     Proyeccion de goles = promedio ofensivo propio x defensa rival, ajustado por forma, localia y debilidad defensiva.
     La matriz de marcadores usa Poisson con ajuste Dixon-Coles para resultados bajos.
+    Corners = volumen ofensivo, tiros, tiros al arco, forma, localia y defensa rival; total evaluado con Poisson.
     El modelo esta enfocado solo en futbol.
   `;
 }
