@@ -1,7 +1,6 @@
 const DEFAULT_API_FOOTBALL_KEY = "0f4bd89af94f37638906a3de25f55d91";
 const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
 const API_FOOTBALL_DAILY_LIMIT = 95;
-const API_FOOTBALL_CACHE_MS = 20 * 60 * 1000;
 const ESPN_BATCH_SIZE = 5;
 const DIXON_COLES_RHO = -0.08;
 
@@ -40,12 +39,14 @@ const LEAGUE = {
   awayGoalDrag: 0.95,
   totalGoalsLine: 2.5,
   totalCornersLine: 8.5,
+  totalCardsLine: 4.5,
 };
 
 const state = {
   games: [],
   selectedId: null,
-  cache: new Map(),
+  apiUsageDate: "",
+  apiRequestsToday: 0,
 };
 
 const els = {
@@ -68,7 +69,7 @@ const els = {
 
 document.addEventListener("DOMContentLoaded", () => {
   els.dateInput.value = toDateInputValue(new Date());
-  els.apiKeyInput.value = localStorage.getItem("api-football-key") || DEFAULT_API_FOOTBALL_KEY;
+  els.apiKeyInput.value = DEFAULT_API_FOOTBALL_KEY;
   FOOTBALL_LEAGUES.forEach((league) => {
     const option = document.createElement("option");
     option.value = league.slug;
@@ -78,9 +79,6 @@ document.addEventListener("DOMContentLoaded", () => {
   els.loadBtn.addEventListener("click", loadSlate);
   els.leagueFilter.addEventListener("change", renderGames);
   els.compareBtn.addEventListener("click", compareSelectedGame);
-  els.apiKeyInput.addEventListener("change", () => {
-    localStorage.setItem("api-football-key", els.apiKeyInput.value.trim());
-  });
   if (window.lucide) window.lucide.createIcons();
   loadSlate();
 });
@@ -132,13 +130,14 @@ async function compareSelectedGame() {
 
   setBusy(true, `Calculando ${game.away.name} vs ${game.home.name}...`);
   try {
-    const [homeContext, awayContext, summary] = await Promise.all([
+    const [homeContext, awayContext, summary, availability] = await Promise.all([
       getTeamContext(game.home, game),
       getTeamContext(game.away, game),
       cargarResumenPartido(game),
+      cargarDisponibilidadPartido(game),
     ]);
 
-    const projection = buildProjection({ game, homeContext, awayContext, summary });
+    const projection = buildProjection({ game, homeContext, awayContext, summary, availability });
     renderSummary(projection);
     renderTeams(projection);
     renderResults(projection);
@@ -152,7 +151,7 @@ async function compareSelectedGame() {
   }
 }
 
-function buildProjection({ game, homeContext, awayContext, summary }) {
+function buildProjection({ game, homeContext, awayContext, summary, availability }) {
   const homeAttack = calcularAtaqueEquipo(homeContext, summary?.homeStats);
   const awayAttack = calcularAtaqueEquipo(awayContext, summary?.awayStats);
   const homeDefense = calcularDefensaEquipo(homeContext, summary?.homeStats);
@@ -161,6 +160,8 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
   const awayForm = calcularFormaReciente(awayContext);
   const homeLocalia = calcularVentajaLocalia(homeContext, true);
   const awayLocalia = calcularVentajaLocalia(awayContext, false);
+  const homeLineup = calcularFactorAlineacion(availability?.home, true);
+  const awayLineup = calcularFactorAlineacion(availability?.away, false);
   const homeMatchup = calcularMatchupFutbol(homeAttack, awayDefense, homeForm, homeLocalia);
   const awayMatchup = calcularMatchupFutbol(awayAttack, homeDefense, awayForm, awayLocalia);
 
@@ -172,6 +173,8 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
     form: homeForm,
     localia: homeLocalia,
     matchup: homeMatchup,
+    lineup: homeLineup,
+    opponentLineup: awayLineup,
     isHome: true,
   });
   const awayGoals = proyectarGolesEquipo({
@@ -182,6 +185,8 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
     form: awayForm,
     localia: awayLocalia,
     matchup: awayMatchup,
+    lineup: awayLineup,
+    opponentLineup: homeLineup,
     isHome: false,
   });
 
@@ -190,21 +195,41 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
     attack: homeAttack,
     opponentDefense: awayDefense,
     form: homeForm,
+    lineup: homeLineup,
+    opponentLineup: awayLineup,
     isHome: true,
   });
   const awayCorners = proyectarCornersEquipo({
     attack: awayAttack,
     opponentDefense: homeDefense,
     form: awayForm,
+    lineup: awayLineup,
+    opponentLineup: homeLineup,
     isHome: false,
   });
   const totalCorners = round1(homeCorners + awayCorners);
   const cornersMatrix = calcularTotalPoisson(totalCorners, LEAGUE.totalCornersLine);
+  const homeCards = proyectarTarjetasEquipo({
+    defense: homeDefense,
+    opponentAttack: awayAttack,
+    form: homeForm,
+    lineup: homeLineup,
+    isHome: true,
+  });
+  const awayCards = proyectarTarjetasEquipo({
+    defense: awayDefense,
+    opponentAttack: homeAttack,
+    form: awayForm,
+    lineup: awayLineup,
+    isHome: false,
+  });
+  const totalCards = round1(homeCards + awayCards);
+  const cardsMatrix = calcularTotalPoisson(totalCards, LEAGUE.totalCardsLine);
   const probability = calcularProbabilidadGanador({
     homeGoals,
     awayGoals,
-    homeScores: { attack: homeAttack, defense: homeDefense, form: homeForm, localia: homeLocalia, matchup: homeMatchup },
-    awayScores: { attack: awayAttack, defense: awayDefense, form: awayForm, localia: awayLocalia, matchup: awayMatchup },
+    homeScores: { attack: homeAttack, defense: homeDefense, form: homeForm, localia: homeLocalia, matchup: homeMatchup, lineup: homeLineup },
+    awayScores: { attack: awayAttack, defense: awayDefense, form: awayForm, localia: awayLocalia, matchup: awayMatchup, lineup: awayLineup },
     matrix,
   });
   const totalGoals = round1(homeGoals + awayGoals);
@@ -213,6 +238,7 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
   const totalLean = matrix.overProb >= matrix.underProb ? "Over 2.5 goles" : "Under 2.5 goles";
   const bttsLean = matrix.bttsProb >= 0.52 ? "Ambos anotan: Si" : "Ambos anotan: No";
   const cornersLean = cornersMatrix.overProb >= cornersMatrix.underProb ? "Over 8.5 corners" : "Under 8.5 corners";
+  const cardsLean = cardsMatrix.overProb >= cardsMatrix.underProb ? "Over 4.5 tarjetas" : "Under 4.5 tarjetas";
 
   return {
     game,
@@ -226,6 +252,8 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
     awayForm,
     homeLocalia,
     awayLocalia,
+    homeLineup,
+    awayLineup,
     homeMatchup,
     awayMatchup,
     homeGoals,
@@ -235,6 +263,10 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
     awayCorners,
     totalCorners,
     cornersMatrix,
+    homeCards,
+    awayCards,
+    totalCards,
+    cardsMatrix,
     matrix,
     probability,
     favorite,
@@ -242,8 +274,9 @@ function buildProjection({ game, homeContext, awayContext, summary }) {
     totalLean,
     bttsLean,
     cornersLean,
+    cardsLean,
     confidence: calcularConfianza({ diff: Math.abs(diff), winProbability: probability.value, homeScore: probability.homeComposite, awayScore: probability.awayComposite }),
-    sources: buildSources(game, summary),
+    sources: buildSources(game, summary, availability),
   };
 }
 
@@ -309,7 +342,7 @@ function calcularMatchupFutbol(attack, opponentDefense, form, localia) {
   return { score: clamp(score, 0, 1), defensiveWeakness, label: scoreLabel(score) };
 }
 
-function proyectarGolesEquipo({ ownContext, opponentContext, attack, opponentDefense, form, localia, matchup, isHome }) {
+function proyectarGolesEquipo({ ownContext, opponentContext, attack, opponentDefense, form, localia, matchup, lineup, opponentLineup, isHome }) {
   const ownGoals = fallback(ownContext.goalsForPerGame, LEAGUE.goalsPerTeam);
   const opponentConcedes = fallback(opponentContext.goalsAgainstPerGame, LEAGUE.goalsPerTeam);
   const baseExpected = (ownGoals * opponentConcedes) / LEAGUE.goalsPerTeam;
@@ -317,22 +350,151 @@ function proyectarGolesEquipo({ ownContext, opponentContext, attack, opponentDef
   const defenseFactor = 0.88 + (1 - numberOr(opponentDefense?.score, 0.5)) * 0.3;
   const formFactor = 0.92 + numberOr(form?.score, 0.5) * 0.18;
   const matchupFactor = 0.9 + numberOr(matchup?.score, 0.5) * 0.22;
+  const lineupAttackFactor = numberOr(lineup?.attackFactor, 1);
+  const opponentDefenseLineupFactor = 1 + (1 - numberOr(opponentLineup?.defenseFactor, 1)) * 0.55;
   const fieldFactor = isHome ? LEAGUE.homeGoalBoost : LEAGUE.awayGoalDrag;
-  return round2(clamp(baseExpected * attackFactor * defenseFactor * formFactor * matchupFactor * fieldFactor, 0.25, 3.8));
+  return round2(clamp(baseExpected * attackFactor * defenseFactor * formFactor * matchupFactor * lineupAttackFactor * opponentDefenseLineupFactor * fieldFactor, 0.25, 3.8));
 }
 
-function proyectarCornersEquipo({ attack, opponentDefense, form, isHome }) {
+function proyectarCornersEquipo({ attack, opponentDefense, form, lineup, opponentLineup, isHome }) {
   const baseCorners = fallback(attack?.corners, LEAGUE.cornersPerTeam);
   const shotVolumeFactor = 0.88 + normalizeHigher(attack?.shots, 7.0, 16.8) * 0.24;
   const pressureFactor = 0.92 + normalizeHigher(attack?.shotsOnTarget, 2.1, 6.4) * 0.16;
   const opponentBlockFactor = 0.94 + (1 - numberOr(opponentDefense?.score, 0.5)) * 0.14;
   const formFactor = 0.95 + numberOr(form?.score, 0.5) * 0.10;
+  const lineupCornerFactor = numberOr(lineup?.cornerFactor, 1);
+  const opponentDefenseLineupFactor = 1 + (1 - numberOr(opponentLineup?.defenseFactor, 1)) * 0.35;
   const fieldFactor = isHome ? 1.04 : 0.97;
-  return round2(clamp(baseCorners * shotVolumeFactor * pressureFactor * opponentBlockFactor * formFactor * fieldFactor, 2.0, 8.5));
+  return round2(clamp(baseCorners * shotVolumeFactor * pressureFactor * opponentBlockFactor * formFactor * lineupCornerFactor * opponentDefenseLineupFactor * fieldFactor, 2.0, 8.5));
+}
+
+function proyectarTarjetasEquipo({ defense, opponentAttack, form, lineup, isHome }) {
+  const baseCards = LEAGUE.cardsPerTeam;
+  const disciplineFactor = numberOr(lineup?.cardFactor, 1);
+  const pressureFactor =
+    0.9 +
+    numberOr(opponentAttack?.score, 0.5) * 0.18 +
+    (1 - numberOr(defense?.score, 0.5)) * 0.16;
+  const formFactor = 1.06 - numberOr(form?.score, 0.5) * 0.12;
+  const fieldFactor = isHome ? 0.97 : 1.06;
+  return round2(clamp(baseCards * disciplineFactor * pressureFactor * formFactor * fieldFactor, 0.7, 5.5));
+}
+
+function calcularFactorAlineacion(info = {}, isHome = false) {
+  const starters = Array.isArray(info?.starters) ? info.starters : [];
+  const substitutes = Array.isArray(info?.substitutes) ? info.substitutes : [];
+  const injuries = Array.isArray(info?.injuries) ? info.injuries : [];
+  const playerPerformance = info?.playerPerformance || {};
+  const topPerformance = Array.isArray(info?.topPerformance) ? info.topPerformance : [];
+  const hasLineup = starters.length >= 8;
+  const performanceItems = getLineupPerformanceItems(starters, playerPerformance, topPerformance);
+  const hasPerformance = performanceItems.length >= 5;
+  if (!hasLineup && !injuries.length && !hasPerformance) {
+    return {
+      score: 0.5,
+      label: "N/D",
+      hasLineup: false,
+      hasPerformance: false,
+      formation: "N/D",
+      startersCount: 0,
+      substitutesCount: 0,
+      injuriesCount: 0,
+      attackFactor: 1,
+      defenseFactor: 1,
+      cornerFactor: 1,
+      cardFactor: 1,
+      performanceScore: 0.5,
+      performanceLabel: "N/D",
+      injuryPenalty: { general: 0, attack: 0, defense: 0 },
+      starters: [],
+      injuries: [],
+      topPerformance: [],
+    };
+  }
+  const formationParts = parseFormation(info?.formation);
+  const defenders = formationParts.length ? formationParts[0] : 4;
+  const forwards = formationParts.length ? formationParts[formationParts.length - 1] : 2;
+  const midfielders = formationParts.length > 2 ? sum(formationParts.slice(1, -1)) : 4;
+  const starterCompleteness = hasLineup ? clamp(starters.length / 11, 0.75, 1.04) : 1;
+  const squadDepth = hasLineup ? clamp(substitutes.length / 9, 0.8, 1.05) : 1;
+  const injuryPenalty = calcularPenalizacionBajas(injuries);
+  const performanceScore = hasPerformance ? average(performanceItems.map((item) => item.score)) : 0.5;
+  const attackPerformance = hasPerformance ? average(performanceItems.map((item) => item.attackScore)) : 0.5;
+  const defensePerformance = hasPerformance ? average(performanceItems.map((item) => item.defenseScore)) : 0.5;
+  const cardRate = hasPerformance ? average(performanceItems.map((item) => item.cardRate)) : 0.22;
+  const attackShape = 1 + (forwards - 2) * 0.025 + (midfielders - 4) * 0.008;
+  const defenseShape = 1 + (defenders - 4) * 0.018;
+  const performanceAttackFactor = 0.91 + attackPerformance * 0.18;
+  const performanceDefenseFactor = 0.91 + defensePerformance * 0.18;
+  const attackFactor = clamp(starterCompleteness * attackShape * squadDepth * performanceAttackFactor * (1 - injuryPenalty.attack), 0.82, 1.14);
+  const defenseFactor = clamp(starterCompleteness * defenseShape * squadDepth * performanceDefenseFactor * (1 - injuryPenalty.defense), 0.82, 1.14);
+  const cornerFactor = clamp((attackFactor * 0.72 + starterCompleteness * 0.28) * (1 - injuryPenalty.general * 0.25), 0.84, 1.12);
+  const cardFactor = clamp(0.86 + normalizeHigher(cardRate, 0.05, 0.48) * 0.36 + injuryPenalty.general * 0.25, 0.78, 1.34);
+  const score = clamp(0.5 + (((attackFactor + defenseFactor + cornerFactor) / 3) - 1) * 1.8, 0, 1);
+
+  return {
+    score,
+    label: hasLineup ? "Oficial" : injuries.length ? "Bajas" : "Rendimiento",
+    hasPerformance,
+    hasLineup,
+    formation: info?.formation || "N/D",
+    startersCount: starters.length,
+    substitutesCount: substitutes.length,
+    injuriesCount: injuries.length,
+    attackFactor,
+    defenseFactor,
+    cornerFactor,
+    cardFactor,
+    performanceScore,
+    performanceLabel: performanceLevel(performanceScore),
+    injuryPenalty,
+    starters,
+    injuries,
+    topPerformance: performanceItems.slice(0, 5),
+  };
+}
+
+function getLineupPerformanceItems(starters = [], playerPerformance = {}, topPerformance = []) {
+  const matched = starters
+    .map((player) => playerPerformance[getPlayerPerformanceKey(player)])
+    .filter(Boolean);
+  return matched.length >= 5 ? matched : topPerformance.slice(0, 11);
+}
+
+function getPlayerPerformanceKey(player = {}) {
+  return player.id ? `id:${player.id}` : `name:${normalizeText(player.name)}`;
+}
+
+function performanceLevel(score) {
+  if (score >= 0.7) return "Alto";
+  if (score >= 0.5) return "Medio";
+  return "Bajo";
+}
+
+function calcularPenalizacionBajas(injuries = []) {
+  return injuries.reduce((acc, item) => {
+    const reason = normalizeText(item.reason || "");
+    const weight = /suspend|red card|ban|sancion|suspended/.test(reason) ? 0.035 : 0.025;
+    acc.general += weight;
+    acc.attack += weight * 0.75;
+    acc.defense += weight * 0.75;
+    return {
+      general: clamp(acc.general, 0, 0.2),
+      attack: clamp(acc.attack, 0, 0.16),
+      defense: clamp(acc.defense, 0, 0.16),
+    };
+  }, { general: 0, attack: 0, defense: 0 });
+}
+
+function parseFormation(value = "") {
+  return String(value || "")
+    .split("-")
+    .map((part) => Number(part.trim()))
+    .filter((part) => Number.isFinite(part) && part > 0);
 }
 
 function calcularProbabilidadGanador({ homeGoals, awayGoals, homeScores, awayScores, matrix }) {
-  const weights = { attack: 0.3, defense: 0.25, form: 0.2, localia: 0.1, matchup: 0.15 };
+  const weights = { attack: 0.27, defense: 0.22, form: 0.18, localia: 0.09, matchup: 0.14, lineup: 0.1 };
   const homeComposite = weightedTeamScore(homeScores, weights);
   const awayComposite = weightedTeamScore(awayScores, weights);
   const compositeHomeProb = clamp(0.5 + (homeComposite - awayComposite) * 0.42, 0.2, 0.8);
@@ -420,22 +582,14 @@ async function cargarJuegosApiFootballPorFecha(fecha) {
   const apiKey = getApiFootballKey();
   if (!apiKey) return [];
   const timezone = getTimezone();
-  const cacheKey = `api-fixtures:${fecha}:${timezone}`;
-  const cached = getCached(cacheKey, API_FOOTBALL_CACHE_MS);
-  if (cached) return cached;
   assertApiFootballQuotaDisponible();
   const data = await fetchApiFootball(`/fixtures?date=${encodeURIComponent(fecha)}&timezone=${encodeURIComponent(timezone)}`);
-  const fixtures = data?.response || [];
-  setCached(cacheKey, fixtures);
-  return fixtures;
+  return data?.response || [];
 }
 
 async function cargarJuegosEspnFutbolPorFecha(fecha) {
   const timezone = getTimezone();
   const date = String(fecha).replace(/-/g, "");
-  const cacheKey = `espn-fixtures:${date}:${timezone}`;
-  const cached = getCached(cacheKey, API_FOOTBALL_CACHE_MS);
-  if (cached) return cached;
 
   const events = [];
   for (let i = 0; i < FOOTBALL_LEAGUES.length; i += ESPN_BATCH_SIZE) {
@@ -450,7 +604,6 @@ async function cargarJuegosEspnFutbolPorFecha(fecha) {
     events.push(...results.flatMap((result) => result.status === "fulfilled" ? result.value : []));
   }
 
-  setCached(cacheKey, events);
   return events;
 }
 
@@ -466,42 +619,239 @@ async function cargarResumenPartido(game) {
   );
 }
 
+async function cargarDisponibilidadPartido(game) {
+  const fixtureId = game?.apiGame?.fixture?.id || game?.apiId;
+  if (!fixtureId) return buildNeutralAvailability(game);
+
+  const [lineupsResult, injuriesResult, homePerformanceResult, awayPerformanceResult] = await Promise.allSettled([
+    cargarAlineacionesApiFootball(fixtureId),
+    cargarBajasApiFootball(fixtureId),
+    cargarRendimientoJugadoresEquipo(game?.home, game),
+    cargarRendimientoJugadoresEquipo(game?.away, game),
+  ]);
+  return combinarDisponibilidad(
+    lineupsResult.status === "fulfilled" ? lineupsResult.value : [],
+    injuriesResult.status === "fulfilled" ? injuriesResult.value : [],
+    {
+      home: homePerformanceResult.status === "fulfilled" ? homePerformanceResult.value : buildEmptyPerformance(),
+      away: awayPerformanceResult.status === "fulfilled" ? awayPerformanceResult.value : buildEmptyPerformance(),
+    },
+    game
+  );
+}
+
+async function cargarAlineacionesApiFootball(fixtureId) {
+  assertApiFootballQuotaDisponible();
+  const data = await fetchApiFootball(`/fixtures/lineups?fixture=${encodeURIComponent(fixtureId)}`);
+  return data?.response || [];
+}
+
+async function cargarBajasApiFootball(fixtureId) {
+  assertApiFootballQuotaDisponible();
+  const data = await fetchApiFootball(`/injuries?fixture=${encodeURIComponent(fixtureId)}`);
+  return data?.response || [];
+}
+
+async function cargarRendimientoJugadoresEquipo(team = {}, game = {}) {
+  if (!team?.apiId) return buildEmptyPerformance();
+  const season = getApiFootballSeason(game);
+  const leagueId = game?.apiGame?.league?.id;
+  if (!season) return buildEmptyPerformance();
+
+  const allPlayers = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    assertApiFootballQuotaDisponible();
+    const leagueParam = leagueId ? `&league=${encodeURIComponent(leagueId)}` : "";
+    const data = await fetchApiFootball(`/players?team=${encodeURIComponent(team.apiId)}&season=${encodeURIComponent(season)}${leagueParam}&page=${page}`);
+    allPlayers.push(...(data?.response || []));
+    totalPages = Math.min(Number(data?.paging?.total) || 1, 4);
+    page += 1;
+  } while (page <= totalPages);
+
+  return buildPlayerPerformance(allPlayers, team, leagueId);
+}
+
+function buildEmptyPerformance() {
+  return { byKey: {}, top: [] };
+}
+
+function buildPlayerPerformance(players = [], team = {}, leagueId = null) {
+  const byKey = {};
+  const items = players.map((entry) => {
+    const stat = selectBestPlayerStat(entry.statistics || [], team, leagueId);
+    if (!stat) return null;
+    return normalizePlayerPerformance(entry.player || {}, stat);
+  }).filter(Boolean);
+
+  items.forEach((item) => {
+    if (item.id) byKey[`id:${item.id}`] = item;
+    byKey[`name:${normalizeText(item.name)}`] = item;
+  });
+
+  return {
+    byKey,
+    top: items
+      .filter((item) => item.minutes > 0 || item.appearances > 0 || item.rating)
+      .sort((a, b) => (b.minutes - a.minutes) || (b.score - a.score))
+      .slice(0, 16),
+  };
+}
+
+function selectBestPlayerStat(stats = [], team = {}, leagueId = null) {
+  const sameTeamStats = stats.filter((stat) => {
+    const statTeamId = String(stat?.team?.id || "");
+    return !team?.apiId || statTeamId === String(team.apiId);
+  });
+  if (leagueId) {
+    const leagueStat = sameTeamStats.find((stat) => String(stat?.league?.id || "") === String(leagueId));
+    if (leagueStat) return leagueStat;
+  }
+  return sameTeamStats.find((stat) => Number(stat?.games?.minutes) > 0 || Number(stat?.games?.appearences) > 0) || sameTeamStats[0] || null;
+}
+
+function normalizePlayerPerformance(player = {}, stat = {}) {
+  const appearances = numberOr(stat?.games?.appearences, 0);
+  const lineups = numberOr(stat?.games?.lineups, 0);
+  const minutes = numberOr(stat?.games?.minutes, 0);
+  const rating = numberOr(stat?.games?.rating, NaN);
+  const goals = numberOr(stat?.goals?.total, 0);
+  const assists = numberOr(stat?.goals?.assists, 0);
+  const shotsOn = numberOr(stat?.shots?.on, 0);
+  const keyPasses = numberOr(stat?.passes?.key, 0);
+  const tackles = numberOr(stat?.tackles?.total, 0);
+  const interceptions = numberOr(stat?.tackles?.interceptions, 0);
+  const blocks = numberOr(stat?.tackles?.blocks, 0);
+  const duelsTotal = numberOr(stat?.duels?.total, 0);
+  const duelsWon = numberOr(stat?.duels?.won, 0);
+  const yellow = numberOr(stat?.cards?.yellow, 0);
+  const red = numberOr(stat?.cards?.red, 0) + numberOr(stat?.cards?.yellowred, 0);
+  const per90Base = Math.max(minutes / 90, appearances, 1);
+  const ratingScore = Number.isFinite(rating) ? normalizeHigher(rating, 5.8, 7.6) : 0.5;
+  const regularityScore = clamp(minutes / Math.max(appearances * 90, 1), 0, 1) * 0.55 + normalizeHigher(lineups, 0, Math.max(appearances, 1)) * 0.45;
+  const offensiveScore =
+    normalizeHigher((goals + assists) / per90Base, 0, 0.75) * 0.55 +
+    normalizeHigher((shotsOn + keyPasses) / per90Base, 0, 3.2) * 0.45;
+  const duelRate = duelsTotal > 0 ? duelsWon / duelsTotal : 0.5;
+  const defensiveScore =
+    normalizeHigher((tackles + interceptions + blocks) / per90Base, 0, 5.5) * 0.62 +
+    normalizeHigher(duelRate, 0.35, 0.72) * 0.38;
+  const cardRate = (yellow + red * 2) / per90Base;
+  const disciplineScore = normalizeLower(cardRate, 0.05, 0.55);
+  const score = clamp(
+    ratingScore * 0.4 +
+      regularityScore * 0.2 +
+      offensiveScore * 0.18 +
+      defensiveScore * 0.14 +
+      disciplineScore * 0.08,
+    0,
+    1
+  );
+  const attackScore = clamp(ratingScore * 0.35 + offensiveScore * 0.45 + regularityScore * 0.2, 0, 1);
+  const defenseScore = clamp(ratingScore * 0.35 + defensiveScore * 0.45 + regularityScore * 0.2, 0, 1);
+
+  return {
+    id: player.id,
+    name: player.name || "Jugador",
+    position: stat?.games?.position || "",
+    rating: Number.isFinite(rating) ? rating : null,
+    appearances,
+    minutes,
+    score,
+    attackScore,
+    defenseScore,
+    cardRate,
+    level: performanceLevel(score),
+  };
+}
+
+function getApiFootballSeason(game = {}) {
+  const season = game?.apiGame?.league?.season;
+  if (season) return season;
+  const date = new Date(game?.date || Date.now());
+  if (Number.isNaN(date.getTime())) return new Date().getFullYear();
+  return date.getMonth() >= 6 ? date.getFullYear() : date.getFullYear() - 1;
+}
+
+function combinarDisponibilidad(lineups = [], injuries = [], performance = {}, game) {
+  const base = buildNeutralAvailability(game);
+  base.home.playerPerformance = performance.home?.byKey || {};
+  base.home.topPerformance = performance.home?.top || [];
+  base.away.playerPerformance = performance.away?.byKey || {};
+  base.away.topPerformance = performance.away?.top || [];
+  lineups.forEach((lineup) => {
+    const side = getSideForTeam(lineup?.team, game);
+    if (!side) return;
+    base[side] = {
+      ...base[side],
+      formation: lineup.formation || "",
+      coach: lineup.coach?.name || "",
+      starters: (lineup.startXI || []).map((item) => normalizeLineupPlayer(item.player)),
+      substitutes: (lineup.substitutes || []).map((item) => normalizeLineupPlayer(item.player)),
+    };
+  });
+  injuries.forEach((injury) => {
+    const side = getSideForTeam(injury?.team, game);
+    if (!side) return;
+    base[side].injuries.push({
+      name: injury?.player?.name || "Jugador",
+      reason: injury?.player?.reason || injury?.reason || "Baja",
+      type: injury?.player?.type || injury?.type || "",
+    });
+  });
+  return base;
+}
+
+function buildNeutralAvailability(game) {
+  return {
+    home: { teamName: game?.home?.name || "Local", formation: "", coach: "", starters: [], substitutes: [], injuries: [], playerPerformance: {}, topPerformance: [] },
+    away: { teamName: game?.away?.name || "Visitante", formation: "", coach: "", starters: [], substitutes: [], injuries: [], playerPerformance: {}, topPerformance: [] },
+  };
+}
+
+function normalizeLineupPlayer(player = {}) {
+  return {
+    id: player.id,
+    name: player.name || "Jugador",
+    number: player.number,
+    pos: player.pos || "",
+    grid: player.grid || "",
+  };
+}
+
+function getSideForTeam(team = {}, game) {
+  if (!team) return "";
+  const teamId = String(team.id || "");
+  if (teamId && String(game?.home?.apiId || "") === teamId) return "home";
+  if (teamId && String(game?.away?.apiId || "") === teamId) return "away";
+  const name = team.name || "";
+  if (sameTeam(name, game?.home?.name)) return "home";
+  if (sameTeam(name, game?.away?.name)) return "away";
+  return "";
+}
+
 async function cargarResumenApiFootball(fixtureId) {
-  const cacheKey = `api-summary:${fixtureId}`;
-  const cached = getCached(cacheKey, 30 * 1000);
-  if (cached) return cached;
   assertApiFootballQuotaDisponible();
   const data = await fetchApiFootball(`/fixtures/statistics?fixture=${encodeURIComponent(fixtureId)}`);
-  const summary = { provider: "API-Football", statistics: data?.response || [] };
-  setCached(cacheKey, summary);
-  return summary;
+  return { provider: "API-Football", statistics: data?.response || [] };
 }
 
 async function cargarResumenEspn(event) {
-  const cacheKey = `espn-summary:${event.leagueSlug}:${event.id}`;
-  const cached = getCached(cacheKey, 30 * 1000);
-  if (cached) return cached;
   const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(event.leagueSlug)}/summary?event=${encodeURIComponent(event.id)}&lang=es&region=mx`;
   const response = await fetch(url);
   if (!response.ok) return null;
-  const summary = { provider: "ESPN", ...(await response.json()) };
-  setCached(cacheKey, summary);
-  return summary;
+  return { provider: "ESPN", ...(await response.json()) };
 }
 
 async function getTeamContext(team, game) {
   if (!team?.apiId) return buildFallbackContext(team, game);
-  const cacheKey = `team-context:${team.apiId}`;
-  const cached = getCached(cacheKey, API_FOOTBALL_CACHE_MS);
-  if (cached) return cached;
 
   try {
     assertApiFootballQuotaDisponible();
     const data = await fetchApiFootball(`/fixtures?team=${encodeURIComponent(team.apiId)}&last=10&timezone=${encodeURIComponent(getTimezone())}`);
     const fixtures = (data?.response || []).filter((fixture) => Number.isFinite(Number(fixture?.goals?.home)) && Number.isFinite(Number(fixture?.goals?.away)));
-    const context = buildContextFromFixtures(team, fixtures);
-    setCached(cacheKey, context);
-    return context;
+    return buildContextFromFixtures(team, fixtures);
   } catch (error) {
     console.warn("No se pudo cargar forma reciente del equipo:", team.name, error);
     return buildFallbackContext(team, game);
@@ -744,6 +1094,7 @@ function renderSummary(model) {
     ["Goles esperados", `${model.awayGoals.toFixed(2)} - ${model.homeGoals.toFixed(2)}`, `Total ${model.totalGoals}`],
     ["Over/Under", model.totalLean, `${Math.round(Math.max(model.matrix.overProb, model.matrix.underProb) * 100)}%`],
     ["Corners", model.cornersLean, `Total ${model.totalCorners}`],
+    ["Tarjetas", model.cardsLean, `Total ${model.totalCards}`],
     ["BTTS", model.bttsLean, `${Math.round(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb) * 100)}%`],
   ];
   els.summaryGrid.innerHTML = cards.map(([label, value, meta]) => `
@@ -758,13 +1109,13 @@ function renderSummary(model) {
 function renderTeams(model) {
   els.teamGrid.innerHTML = `
     <div class="grid gap-5 xl:grid-cols-2">
-      ${renderTeamCard(model.awayContext, model.awayAttack, model.awayDefense, model.awayForm, model.awayMatchup, model.awayGoals, model.awayCorners, false)}
-      ${renderTeamCard(model.homeContext, model.homeAttack, model.homeDefense, model.homeForm, model.homeMatchup, model.homeGoals, model.homeCorners, true)}
+      ${renderTeamCard(model.awayContext, model.awayAttack, model.awayDefense, model.awayForm, model.awayMatchup, model.awayLineup, model.awayGoals, model.awayCorners, model.awayCards, false)}
+      ${renderTeamCard(model.homeContext, model.homeAttack, model.homeDefense, model.homeForm, model.homeMatchup, model.homeLineup, model.homeGoals, model.homeCorners, model.homeCards, true)}
     </div>
   `;
 }
 
-function renderTeamCard(context, attack, defense, form, matchup, goals, corners, isHome) {
+function renderTeamCard(context, attack, defense, form, matchup, lineup, goals, corners, cards, isHome) {
   return `
     <article class="rounded-lg border border-slate-200 bg-white p-4 shadow-panel">
       <div class="flex items-center gap-3 border-b border-slate-100 pb-4">
@@ -780,7 +1131,11 @@ function renderTeamCard(context, attack, defense, form, matchup, goals, corners,
         ${metricBlock("Forma", form.label, scorePercent(form.score), "PPG " + round2(context.pointsPerGame))}
         ${metricBlock("Matchup", matchup.label, scorePercent(matchup.score), "xG " + goals.toFixed(2))}
         ${metricBlock("Corners", corners.toFixed(2), "xC", "Base " + round2(attack.corners))}
+        ${metricBlock("Tarjetas", Number.isFinite(cards) ? cards.toFixed(2) : "-", "xT", `Factor ${round2(lineup.cardFactor)}`)}
+        ${metricBlock("Alineacion", lineup.label, `x${round2(lineup.attackFactor)}`, lineupMeta(lineup))}
+        ${metricBlock("Rendimiento", lineup.performanceLabel, scorePercent(lineup.performanceScore), performanceMeta(lineup))}
       </div>
+      ${renderLineupDetail(lineup)}
     </article>
   `;
 }
@@ -791,6 +1146,9 @@ function renderResults(model) {
     ["Ganador", model.favorite, `${Math.round(p.value * 100)}%`, model.confidence, `Local ${pct(p.homeProb)} | Empate ${pct(p.drawProb)} | Visita ${pct(p.awayProb)}`],
     ["Total goles", model.totalLean, model.totalGoals.toFixed(1), confidenceFromProb(Math.max(model.matrix.overProb, model.matrix.underProb)), `Over ${pct(model.matrix.overProb)} | Under ${pct(model.matrix.underProb)}`],
     ["Total corners", model.cornersLean, model.totalCorners.toFixed(1), confidenceFromProb(Math.max(model.cornersMatrix.overProb, model.cornersMatrix.underProb)), `Over ${pct(model.cornersMatrix.overProb)} | Under ${pct(model.cornersMatrix.underProb)}`],
+    ["Total tarjetas", model.cardsLean, model.totalCards.toFixed(1), confidenceFromProb(Math.max(model.cardsMatrix.overProb, model.cardsMatrix.underProb)), `Over ${pct(model.cardsMatrix.overProb)} | Under ${pct(model.cardsMatrix.underProb)}`],
+    ["Alineaciones", `${model.awayLineup.label} / ${model.homeLineup.label}`, `${model.awayLineup.formation} - ${model.homeLineup.formation}`, lineupConfidence(model), `Bajas: ${model.awayLineup.injuriesCount} visita | ${model.homeLineup.injuriesCount} local`],
+    ["Rendimiento jugadores", `${model.awayLineup.performanceLabel} / ${model.homeLineup.performanceLabel}`, `${scorePercent(model.awayLineup.performanceScore)} - ${scorePercent(model.homeLineup.performanceScore)}`, performanceConfidence(model), "Rating, minutos, goles/asistencias, defensa y disciplina"],
     ["Ambos anotan", model.bttsLean, pct(model.matrix.bttsProb), confidenceFromProb(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb)), "Poisson con goles esperados de ambos equipos"],
     ["Marcador probable", model.matrix.topScores.map((s) => `${s.a}-${s.h}`).join(" / "), `${model.awayGoals.toFixed(2)}-${model.homeGoals.toFixed(2)}`, "Media", "Marcadores ordenados por probabilidad"],
   ];
@@ -812,6 +1170,9 @@ function renderFormula(model) {
     Proyeccion de goles = promedio ofensivo propio x defensa rival, ajustado por forma, localia y debilidad defensiva.
     La matriz de marcadores usa Poisson con ajuste Dixon-Coles para resultados bajos.
     Corners = volumen ofensivo, tiros, tiros al arco, forma, localia y defensa rival; total evaluado con Poisson.
+    Alineacion = titulares, formacion, suplentes y bajas de API-Football aplicadas como factor de ataque/defensa.
+    Rendimiento = rating, minutos, aportes ofensivos/defensivos y disciplina de jugadores.
+    Tarjetas = disciplina del XI/plantel, presion defensiva, forma y condicion local/visitante.
     El modelo esta enfocado solo en futbol.
   `;
 }
@@ -852,26 +1213,18 @@ function assertApiFootballQuotaDisponible() {
   }
 }
 
-function getApiFootballUsageKey() {
-  return `api-football-usage-${toDateInputValue(new Date())}`;
-}
-
 function getApiFootballUsage() {
-  return Number(localStorage.getItem(getApiFootballUsageKey()) || "0") || 0;
+  const today = toDateInputValue(new Date());
+  if (state.apiUsageDate !== today) {
+    state.apiUsageDate = today;
+    state.apiRequestsToday = 0;
+  }
+  return state.apiRequestsToday;
 }
 
 function registrarApiFootballRequest() {
-  localStorage.setItem(getApiFootballUsageKey(), String(getApiFootballUsage() + 1));
-}
-
-function getCached(key, maxAgeMs) {
-  const item = state.cache.get(key);
-  if (!item || Date.now() - item.createdAt > maxAgeMs) return null;
-  return item.value;
-}
-
-function setCached(key, value) {
-  state.cache.set(key, { createdAt: Date.now(), value });
+  getApiFootballUsage();
+  state.apiRequestsToday += 1;
 }
 
 function setBusy(isBusy, message = "") {
@@ -902,11 +1255,55 @@ function getScoreFromGame(game) {
   return Number.isFinite(home?.score) && Number.isFinite(away?.score) ? { home: home.score, away: away.score } : null;
 }
 
-function buildSources(game, summary) {
-  return [game.apiGame ? "API-Football" : "", game.espnEvent ? "ESPN" : "", summary?.provider || ""]
+function buildSources(game, summary, availability) {
+  const hasLineup = availability?.home?.starters?.length || availability?.away?.starters?.length;
+  const hasInjuries = availability?.home?.injuries?.length || availability?.away?.injuries?.length;
+  const hasPerformance = availability?.home?.topPerformance?.length || availability?.away?.topPerformance?.length;
+  return [game.apiGame ? "API-Football" : "", game.espnEvent ? "ESPN" : "", summary?.provider || "", hasLineup ? "Lineups" : "", hasInjuries ? "Bajas" : "", hasPerformance ? "Rendimiento" : ""]
     .flatMap((item) => item.split(" + "))
     .filter(Boolean)
     .filter((item, index, arr) => arr.indexOf(item) === index);
+}
+
+function lineupMeta(lineup = {}) {
+  if (lineup.hasLineup) {
+    return `${lineup.formation} | XI ${lineup.startersCount} | bajas ${lineup.injuriesCount}`;
+  }
+  if (lineup.injuriesCount) return `Sin XI | bajas ${lineup.injuriesCount}`;
+  return "Sin XI oficial";
+}
+
+function lineupConfidence(model) {
+  if (model.homeLineup.hasLineup && model.awayLineup.hasLineup) return "Alta";
+  if (model.homeLineup.hasLineup || model.awayLineup.hasLineup || model.homeLineup.injuriesCount || model.awayLineup.injuriesCount) return "Media";
+  return "Baja";
+}
+
+function performanceMeta(lineup = {}) {
+  const base = lineup.hasLineup ? "XI" : "Plantel";
+  return lineup.hasPerformance ? `${base} | ${lineup.topPerformance.length} jugadores` : "Sin stats";
+}
+
+function performanceConfidence(model) {
+  if (model.homeLineup.hasPerformance && model.awayLineup.hasPerformance) return "Alta";
+  if (model.homeLineup.hasPerformance || model.awayLineup.hasPerformance) return "Media";
+  return "Baja";
+}
+
+function renderLineupDetail(lineup = {}) {
+  const starters = (lineup.starters || []).slice(0, 11).map((player) => player.name).filter(Boolean);
+  const injuries = (lineup.injuries || []).slice(0, 4).map((player) => `${player.name}${player.reason ? ` (${player.reason})` : ""}`);
+  const topPlayers = (lineup.topPerformance || []).slice(0, 4).map((player) => `${player.name} ${Math.round(player.score * 100)}%`);
+  if (!starters.length && !injuries.length && !topPlayers.length) {
+    return `<p class="mt-4 rounded-lg bg-slate-50 p-3 text-xs font-semibold text-slate-500">Alineacion oficial y rendimiento de jugadores no publicados por API-Football.</p>`;
+  }
+  return `
+    <div class="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+      ${starters.length ? `<p><strong class="text-slate-800">XI:</strong> ${escapeHtml(starters.join(", "))}</p>` : `<p><strong class="text-slate-800">XI:</strong> No publicado.</p>`}
+      ${topPlayers.length ? `<p class="mt-1"><strong class="text-slate-800">Rendimiento:</strong> ${escapeHtml(topPlayers.join(", "))}</p>` : ""}
+      ${injuries.length ? `<p class="mt-1"><strong class="text-slate-800">Bajas:</strong> ${escapeHtml(injuries.join(", "))}</p>` : ""}
+    </div>
+  `;
 }
 
 function metricBlock(label, value, percent, meta) {
@@ -999,6 +1396,11 @@ function round2(value) {
 
 function sum(values) {
   return values.reduce((acc, value) => acc + numberOr(value, 0), 0);
+}
+
+function average(values) {
+  const clean = values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  return clean.length ? sum(clean) / clean.length : 0;
 }
 
 function scoreLabel(score) {
