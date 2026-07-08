@@ -5,6 +5,7 @@ const ESPN_BATCH_SIZE = 5;
 const DIXON_COLES_RHO = -0.08;
 const RECENT_MATCH_LIMIT = 10;
 const RECENT_FETCH_LIMIT = 30;
+const H2H_MATCH_LIMIT = 10;
 
 const FOOTBALL_LEAGUES = [
   { slug: "fifa.world", label: "FIFA" },
@@ -132,14 +133,15 @@ async function compareSelectedGame() {
 
   setBusy(true, `Calculando ${game.away.name} vs ${game.home.name}...`);
   try {
-    const [homeContext, awayContext, summary, availability] = await Promise.all([
+    const [homeContext, awayContext, summary, availability, h2h] = await Promise.all([
       getTeamContext(game.home, game),
       getTeamContext(game.away, game),
       cargarResumenPartido(game),
       cargarDisponibilidadPartido(game),
+      cargarH2HPartido(game),
     ]);
 
-    const projection = buildProjection({ game, homeContext, awayContext, summary, availability });
+    const projection = buildProjection({ game, homeContext, awayContext, summary, availability, h2h });
     renderSummary(projection);
     renderTeams(projection);
     renderResults(projection);
@@ -153,7 +155,7 @@ async function compareSelectedGame() {
   }
 }
 
-function buildProjection({ game, homeContext, awayContext, summary, availability }) {
+function buildProjection({ game, homeContext, awayContext, summary, availability, h2h = buildNeutralH2H() }) {
   const homeAttack = calcularAtaqueEquipo(homeContext, summary?.homeStats);
   const awayAttack = calcularAtaqueEquipo(awayContext, summary?.awayStats);
   const homeDefense = calcularDefensaEquipo(homeContext, summary?.homeStats);
@@ -167,7 +169,8 @@ function buildProjection({ game, homeContext, awayContext, summary, availability
   const homeMatchup = calcularMatchupFutbol(homeAttack, awayDefense, homeForm, homeLocalia);
   const awayMatchup = calcularMatchupFutbol(awayAttack, homeDefense, awayForm, awayLocalia);
 
-  const homeGoals = proyectarGolesEquipo({
+  const h2hAdjustment = calcularAjusteH2H(h2h);
+  const homeBaseGoals = proyectarGolesEquipo({
     ownContext: homeContext,
     opponentContext: awayContext,
     attack: homeAttack,
@@ -179,7 +182,7 @@ function buildProjection({ game, homeContext, awayContext, summary, availability
     opponentLineup: awayLineup,
     isHome: true,
   });
-  const awayGoals = proyectarGolesEquipo({
+  const awayBaseGoals = proyectarGolesEquipo({
     ownContext: awayContext,
     opponentContext: homeContext,
     attack: awayAttack,
@@ -191,6 +194,8 @@ function buildProjection({ game, homeContext, awayContext, summary, availability
     opponentLineup: homeLineup,
     isHome: false,
   });
+  const homeGoals = aplicarAjusteGoles(homeBaseGoals, h2hAdjustment.homeFactor);
+  const awayGoals = aplicarAjusteGoles(awayBaseGoals, h2hAdjustment.awayFactor);
 
   const matrix = calcularMatrizPoisson(homeGoals, awayGoals, LEAGUE.totalGoalsLine);
   const homeCorners = proyectarCornersEquipo({
@@ -278,7 +283,7 @@ function buildProjection({ game, homeContext, awayContext, summary, availability
     cornersLean,
     cardsLean,
     confidence: calcularConfianza({ diff: Math.abs(diff), winProbability: probability.value, homeScore: probability.homeComposite, awayScore: probability.awayComposite }),
-    sources: buildSources(game, summary, availability),
+    sources: buildSources(game, summary, availability, h2h),
   };
 }
 
@@ -620,6 +625,112 @@ async function cargarResumenPartido(game) {
     espnSummary.status === "fulfilled" ? espnSummary.value : null,
     game
   );
+}
+
+async function cargarH2HPartido(game) {
+  if (!debeUsarH2H(game)) return buildNeutralH2H();
+  const homeId = game?.home?.apiId;
+  const awayId = game?.away?.apiId;
+  if (!homeId || !awayId) return buildNeutralH2H();
+
+  try {
+    assertApiFootballQuotaDisponible();
+    const data = await fetchApiFootball(`/fixtures/headtohead?h2h=${encodeURIComponent(`${homeId}-${awayId}`)}&last=${H2H_MATCH_LIMIT}&timezone=${encodeURIComponent(getTimezone())}`);
+    return buildH2HContext(game, data?.response || []);
+  } catch (error) {
+    console.warn("No se pudo cargar H2H:", game?.home?.name, game?.away?.name, error);
+    return buildNeutralH2H();
+  }
+}
+
+function buildH2HContext(game, fixtures = []) {
+  const homeId = String(game?.home?.apiId || "");
+  const awayId = String(game?.away?.apiId || "");
+  const rows = fixtures.map((fixture) => {
+    const fixtureHomeId = String(fixture?.teams?.home?.id || "");
+    const fixtureAwayId = String(fixture?.teams?.away?.id || "");
+    const rawHomeGoals = fixture?.goals?.home;
+    const rawAwayGoals = fixture?.goals?.away;
+    if (rawHomeGoals === null || rawHomeGoals === undefined || rawAwayGoals === null || rawAwayGoals === undefined) return null;
+    const goalsHome = Number(rawHomeGoals);
+    const goalsAway = Number(rawAwayGoals);
+    if (!Number.isFinite(goalsHome) || !Number.isFinite(goalsAway)) return null;
+
+    let currentHomeGoals = null;
+    let currentAwayGoals = null;
+    if (fixtureHomeId === homeId && fixtureAwayId === awayId) {
+      currentHomeGoals = goalsHome;
+      currentAwayGoals = goalsAway;
+    } else if (fixtureHomeId === awayId && fixtureAwayId === homeId) {
+      currentHomeGoals = goalsAway;
+      currentAwayGoals = goalsHome;
+    }
+    if (!Number.isFinite(currentHomeGoals) || !Number.isFinite(currentAwayGoals)) return null;
+    return { homeGoals: currentHomeGoals, awayGoals: currentAwayGoals, totalGoals: currentHomeGoals + currentAwayGoals };
+  }).filter(Boolean);
+
+  if (!rows.length) return buildNeutralH2H();
+  const games = rows.length;
+  const homeGoals = sum(rows.map((row) => row.homeGoals));
+  const awayGoals = sum(rows.map((row) => row.awayGoals));
+  const avgGoals = sum(rows.map((row) => row.totalGoals)) / games;
+  const over25Rate = rows.filter((row) => row.totalGoals > LEAGUE.totalGoalsLine).length / games;
+  const bttsRate = rows.filter((row) => row.homeGoals > 0 && row.awayGoals > 0).length / games;
+  const homeWinRate = rows.filter((row) => row.homeGoals > row.awayGoals).length / games;
+  const awayWinRate = rows.filter((row) => row.awayGoals > row.homeGoals).length / games;
+  const drawRate = rows.filter((row) => row.homeGoals === row.awayGoals).length / games;
+  const trend = avgGoals >= 2.65 || over25Rate >= 0.56
+    ? "Tendencia Over H2H"
+    : avgGoals <= 2.25 || over25Rate <= 0.38
+      ? "Tendencia Under H2H"
+      : "H2H neutral";
+
+  return {
+    available: true,
+    games,
+    avgGoals,
+    homeGoalsPerGame: homeGoals / games,
+    awayGoalsPerGame: awayGoals / games,
+    over25Rate,
+    under25Rate: 1 - over25Rate,
+    bttsRate,
+    homeWinRate,
+    awayWinRate,
+    drawRate,
+    trend,
+  };
+}
+
+function buildNeutralH2H() {
+  return {
+    available: false,
+    games: 0,
+    avgGoals: LEAGUE.goalsPerGame,
+    homeGoalsPerGame: LEAGUE.goalsPerTeam,
+    awayGoalsPerGame: LEAGUE.goalsPerTeam,
+    over25Rate: 0.5,
+    under25Rate: 0.5,
+    bttsRate: 0.5,
+    homeWinRate: 0.33,
+    awayWinRate: 0.33,
+    drawRate: 0.34,
+    trend: "Sin H2H",
+  };
+}
+
+function calcularAjusteH2H(h2h = {}) {
+  if (!h2h.available || !h2h.games) return { homeFactor: 1, awayFactor: 1 };
+  const sampleWeight = clamp(h2h.games / H2H_MATCH_LIMIT, 0, 1);
+  const totalBias = clamp((h2h.avgGoals - LEAGUE.goalsPerGame) / LEAGUE.goalsPerGame, -0.18, 0.18) * 0.35 * sampleWeight;
+  const sideBias = clamp((h2h.homeGoalsPerGame - h2h.awayGoalsPerGame) / LEAGUE.goalsPerGame, -0.18, 0.18) * 0.30 * sampleWeight;
+  return {
+    homeFactor: clamp(1 + totalBias + sideBias, 0.9, 1.1),
+    awayFactor: clamp(1 + totalBias - sideBias, 0.9, 1.1),
+  };
+}
+
+function aplicarAjusteGoles(goals, factor) {
+  return round2(clamp(numberOr(goals, LEAGUE.goalsPerTeam) * numberOr(factor, 1), 0.25, 3.8));
 }
 
 async function cargarDisponibilidadPartido(game) {
@@ -1196,6 +1307,7 @@ function renderResults(model) {
     ["Total goles", model.totalLean, model.totalGoals.toFixed(1), confidenceFromProb(Math.max(model.matrix.overProb, model.matrix.underProb)), `Over ${pct(model.matrix.overProb)} | Under ${pct(model.matrix.underProb)}`],
     ["Total corners", model.cornersLean, model.totalCorners.toFixed(1), confidenceFromProb(Math.max(model.cornersMatrix.overProb, model.cornersMatrix.underProb)), `Over ${pct(model.cornersMatrix.overProb)} | Under ${pct(model.cornersMatrix.underProb)}`],
     ["Total tarjetas", model.cardsLean, model.totalCards.toFixed(1), confidenceFromProb(Math.max(model.cardsMatrix.overProb, model.cardsMatrix.underProb)), `Over ${pct(model.cardsMatrix.overProb)} | Under ${pct(model.cardsMatrix.underProb)}`],
+    ...(model.h2h?.available ? [["H2H", model.h2h.trend, `${round2(model.h2h.avgGoals)} goles`, h2hConfidence(model.h2h), `${model.h2h.games} partidos | Over ${pct(model.h2h.over25Rate)} | BTTS ${pct(model.h2h.bttsRate)}`]] : []),
     ["Alineaciones", `${model.awayLineup.label} / ${model.homeLineup.label}`, `${model.awayLineup.formation} - ${model.homeLineup.formation}`, lineupConfidence(model), `Bajas: ${model.awayLineup.injuriesCount} visita | ${model.homeLineup.injuriesCount} local`],
     ["Rendimiento jugadores", `${model.awayLineup.performanceLabel} / ${model.homeLineup.performanceLabel}`, `${scorePercent(model.awayLineup.performanceScore)} - ${scorePercent(model.homeLineup.performanceScore)}`, performanceConfidence(model), "Rating, minutos, goles/asistencias, defensa y disciplina"],
     ["Ambos anotan", model.bttsLean, pct(model.matrix.bttsProb), confidenceFromProb(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb)), "Poisson con goles esperados de ambos equipos"],
@@ -1218,6 +1330,7 @@ function renderFormula(model) {
     ataque 30%, defensa 25%, forma 20%, localia 10% y matchup 15%.
     Ataque, defensa y forma combinan ultimos 10 generales con ultimos 10 local/visitante segun la condicion del partido.
     Proyeccion de goles = promedio ofensivo propio x defensa rival, ajustado por forma, localia y debilidad defensiva.
+    H2H se aplica solo en partidos futuros como ajuste pequeno, segun goles, Over/Under y BTTS de enfrentamientos directos.
     La matriz de marcadores usa Poisson con ajuste Dixon-Coles para resultados bajos.
     Corners = volumen ofensivo, tiros, tiros al arco, forma, localia y defensa rival; total evaluado con Poisson.
     Alineacion = titulares, formacion, suplentes y bajas de API-Football aplicadas como factor de ataque/defensa.
@@ -1305,11 +1418,24 @@ function getScoreFromGame(game) {
   return Number.isFinite(home?.score) && Number.isFinite(away?.score) ? { home: home.score, away: away.score } : null;
 }
 
-function buildSources(game, summary, availability) {
+function debeUsarH2H(game) {
+  const apiStatus = String(game?.apiGame?.fixture?.status?.short || "").toUpperCase();
+  if (["1H", "HT", "2H", "ET", "BT", "P", "SUSP", "INT", "FT", "AET", "PEN", "CANC", "ABD", "AWD", "WO"].includes(apiStatus)) return false;
+  if (["NS", "TBD"].includes(apiStatus)) return true;
+
+  const espnState = String(game?.espnEvent?.status?.type?.state || "").toLowerCase();
+  if (espnState === "in" || espnState === "post") return false;
+  if (espnState === "pre") return true;
+
+  const kickoff = new Date(game?.date || "");
+  return !Number.isNaN(kickoff.getTime()) && kickoff.getTime() > Date.now();
+}
+
+function buildSources(game, summary, availability, h2h) {
   const hasLineup = availability?.home?.starters?.length || availability?.away?.starters?.length;
   const hasInjuries = availability?.home?.injuries?.length || availability?.away?.injuries?.length;
   const hasPerformance = availability?.home?.topPerformance?.length || availability?.away?.topPerformance?.length;
-  return [game.apiGame ? "API-Football" : "", game.espnEvent ? "ESPN" : "", summary?.provider || "", hasLineup ? "Lineups" : "", hasInjuries ? "Bajas" : "", hasPerformance ? "Rendimiento" : ""]
+  return [game.apiGame ? "API-Football" : "", game.espnEvent ? "ESPN" : "", summary?.provider || "", h2h?.available ? "H2H" : "", hasLineup ? "Lineups" : "", hasInjuries ? "Bajas" : "", hasPerformance ? "Rendimiento" : ""]
     .flatMap((item) => item.split(" + "))
     .filter(Boolean)
     .filter((item, index, arr) => arr.indexOf(item) === index);
@@ -1337,6 +1463,11 @@ function performanceMeta(lineup = {}) {
 function performanceConfidence(model) {
   if (model.homeLineup.hasPerformance && model.awayLineup.hasPerformance) return "Alta";
   if (model.homeLineup.hasPerformance || model.awayLineup.hasPerformance) return "Media";
+  return "Baja";
+}
+
+function h2hConfidence(h2h = {}) {
+  if (h2h.games >= 6) return "Media";
   return "Baja";
 }
 
