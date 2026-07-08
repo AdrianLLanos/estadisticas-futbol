@@ -1310,7 +1310,7 @@ function renderResults(model) {
     ...(model.h2h?.available ? [["H2H", model.h2h.trend, `${round2(model.h2h.avgGoals)} goles`, h2hConfidence(model.h2h), `${model.h2h.games} partidos | Over ${pct(model.h2h.over25Rate)} | BTTS ${pct(model.h2h.bttsRate)}`]] : []),
     ["Alineaciones", `${model.awayLineup.label} / ${model.homeLineup.label}`, `${model.awayLineup.formation} - ${model.homeLineup.formation}`, lineupConfidence(model), `Bajas: ${model.awayLineup.injuriesCount} visita | ${model.homeLineup.injuriesCount} local`],
     ["Rendimiento jugadores", `${model.awayLineup.performanceLabel} / ${model.homeLineup.performanceLabel}`, `${scorePercent(model.awayLineup.performanceScore)} - ${scorePercent(model.homeLineup.performanceScore)}`, performanceConfidence(model), "Rating, minutos, goles/asistencias, defensa y disciplina"],
-    ["Ambos anotan", model.bttsLean, pct(model.matrix.bttsProb), confidenceFromProb(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb)), "Poisson con goles esperados de ambos equipos"],
+    ["Ambos anotan", model.bttsLean, `Si ${pct(model.matrix.bttsProb)} | No ${pct(1 - model.matrix.bttsProb)}`, confidenceFromProb(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb)), "Poisson con goles esperados de ambos equipos"],
     ["Marcador probable", model.matrix.topScores.map((s) => `${s.a}-${s.h}`).join(" / "), `${model.awayGoals.toFixed(2)}-${model.homeGoals.toFixed(2)}`, "Media", "Marcadores ordenados por probabilidad"],
   ];
   els.resultsBody.innerHTML = rows.map(([market, pick, estimated, confidence, base]) => `
