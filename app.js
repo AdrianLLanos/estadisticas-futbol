@@ -3,6 +3,8 @@ const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
 const API_FOOTBALL_DAILY_LIMIT = 95;
 const ESPN_BATCH_SIZE = 5;
 const DIXON_COLES_RHO = -0.08;
+const RECENT_MATCH_LIMIT = 10;
+const RECENT_FETCH_LIMIT = 30;
 
 const FOOTBALL_LEAGUES = [
   { slug: "fifa.world", label: "FIFA" },
@@ -282,11 +284,11 @@ function buildProjection({ game, homeContext, awayContext, summary, availability
 
 function calcularAtaqueEquipo(context = {}, liveStats = {}) {
   const metrics = {
-    goalsFor: fallback(context.goalsForPerGame, LEAGUE.goalsPerTeam),
+    goalsFor: contextualMetric(context, "goalsForPerGame", LEAGUE.goalsPerTeam),
     shots: fallback(liveStats.shots, context.shotsPerGame, LEAGUE.shotsPerTeam),
     shotsOnTarget: fallback(liveStats.shotsOnTarget, context.shotsOnTargetPerGame, LEAGUE.shotsOnTargetPerTeam),
     corners: fallback(liveStats.corners, context.cornersPerGame, LEAGUE.cornersPerTeam),
-    conversion: fallback(context.conversionRate, 0.12),
+    conversion: contextualMetric(context, "conversionRate", 0.12),
   };
   const score =
     normalizeHigher(metrics.goalsFor, 0.55, 2.45) * 0.34 +
@@ -299,8 +301,8 @@ function calcularAtaqueEquipo(context = {}, liveStats = {}) {
 
 function calcularDefensaEquipo(context = {}, liveStats = {}) {
   const metrics = {
-    goalsAgainst: fallback(context.goalsAgainstPerGame, LEAGUE.goalsPerTeam),
-    cleanSheetRate: fallback(context.cleanSheetRate, 0.28),
+    goalsAgainst: contextualMetric(context, "goalsAgainstPerGame", LEAGUE.goalsPerTeam),
+    cleanSheetRate: contextualMetric(context, "cleanSheetRate", 0.28),
     shotsAgainst: fallback(liveStats.shotsAgainst, context.shotsAgainstPerGame, LEAGUE.shotsPerTeam),
     shotsOnTargetAgainst: fallback(liveStats.shotsOnTargetAgainst, context.shotsOnTargetAgainstPerGame, LEAGUE.shotsOnTargetPerTeam),
   };
@@ -313,16 +315,17 @@ function calcularDefensaEquipo(context = {}, liveStats = {}) {
 }
 
 function calcularFormaReciente(context = {}) {
-  const winRate = fallback(context.winRate, 0.33);
-  const drawRate = fallback(context.drawRate, 0.27);
-  const goalDiff = fallback(context.goalDiffPerGame, 0);
+  const winRate = contextualMetric(context, "winRate", 0.33);
+  const drawRate = contextualMetric(context, "drawRate", 0.27);
+  const goalDiff = contextualMetric(context, "goalDiffPerGame", 0);
+  const pointsPerGame = contextualMetric(context, "pointsPerGame", 1.25);
   const unbeatenRate = clamp(winRate + drawRate, 0, 1);
   const score =
     normalizeHigher(winRate, 0.05, 0.72) * 0.36 +
     normalizeHigher(unbeatenRate, 0.25, 0.9) * 0.18 +
     normalizeHigher(goalDiff, -1.3, 1.3) * 0.32 +
-    normalizeHigher(context.pointsPerGame || 1.25, 0.45, 2.35) * 0.14;
-  return { winRate, drawRate, unbeatenRate, goalDiff, score: clamp(score, 0, 1), label: scoreLabel(score) };
+    normalizeHigher(pointsPerGame, 0.45, 2.35) * 0.14;
+  return { winRate, drawRate, unbeatenRate, goalDiff, pointsPerGame, score: clamp(score, 0, 1), label: scoreLabel(score) };
 }
 
 function calcularVentajaLocalia(context = {}, isHome = false) {
@@ -343,8 +346,8 @@ function calcularMatchupFutbol(attack, opponentDefense, form, localia) {
 }
 
 function proyectarGolesEquipo({ ownContext, opponentContext, attack, opponentDefense, form, localia, matchup, lineup, opponentLineup, isHome }) {
-  const ownGoals = fallback(ownContext.goalsForPerGame, LEAGUE.goalsPerTeam);
-  const opponentConcedes = fallback(opponentContext.goalsAgainstPerGame, LEAGUE.goalsPerTeam);
+  const ownGoals = contextualMetric(ownContext, "goalsForPerGame", LEAGUE.goalsPerTeam);
+  const opponentConcedes = contextualMetric(opponentContext, "goalsAgainstPerGame", LEAGUE.goalsPerTeam);
   const baseExpected = (ownGoals * opponentConcedes) / LEAGUE.goalsPerTeam;
   const attackFactor = 0.86 + numberOr(attack?.score, 0.5) * 0.32;
   const defenseFactor = 0.88 + (1 - numberOr(opponentDefense?.score, 0.5)) * 0.3;
@@ -849,7 +852,7 @@ async function getTeamContext(team, game) {
 
   try {
     assertApiFootballQuotaDisponible();
-    const data = await fetchApiFootball(`/fixtures?team=${encodeURIComponent(team.apiId)}&last=10&timezone=${encodeURIComponent(getTimezone())}`);
+    const data = await fetchApiFootball(`/fixtures?team=${encodeURIComponent(team.apiId)}&last=${RECENT_FETCH_LIMIT}&timezone=${encodeURIComponent(getTimezone())}`);
     const fixtures = (data?.response || []).filter((fixture) => Number.isFinite(Number(fixture?.goals?.home)) && Number.isFinite(Number(fixture?.goals?.away)));
     return buildContextFromFixtures(team, fixtures);
   } catch (error) {
@@ -864,20 +867,57 @@ function buildContextFromFixtures(team, fixtures = []) {
     const isHome = String(fixture?.teams?.home?.id || "") === teamId;
     const gf = Number(isHome ? fixture?.goals?.home : fixture?.goals?.away);
     const ga = Number(isHome ? fixture?.goals?.away : fixture?.goals?.home);
-    return { isHome, gf, ga, result: gf > ga ? "W" : gf === ga ? "D" : "L" };
-  }).filter((row) => Number.isFinite(row.gf) && Number.isFinite(row.ga));
+    const date = new Date(fixture?.fixture?.date || 0).getTime();
+    return { isHome, gf, ga, date, result: gf > ga ? "W" : gf === ga ? "D" : "L" };
+  })
+    .filter((row) => Number.isFinite(row.gf) && Number.isFinite(row.ga))
+    .sort((a, b) => b.date - a.date);
 
   if (!rows.length) return buildFallbackContext(team);
+  const recentRows = rows.slice(0, RECENT_MATCH_LIMIT);
+  const homeRows = rows.filter((row) => row.isHome).slice(0, RECENT_MATCH_LIMIT);
+  const awayRows = rows.filter((row) => !row.isHome).slice(0, RECENT_MATCH_LIMIT);
+  const homeStats = buildRecentStats(homeRows);
+  const awayStats = buildRecentStats(awayRows);
+  const venueStats = team.homeAway === "home" ? homeStats : awayStats;
+  const overallStats = buildRecentStats(recentRows);
+
+  return {
+    ...overallStats,
+    name: team.name,
+    logo: team.logo,
+    venueLabel: team.homeAway === "home" ? "local" : "visitante",
+    venueStats,
+    homeStats,
+    awayStats,
+    homeWinRate: homeStats.games ? homeStats.winRate : overallStats.winRate,
+    awayWinRate: awayStats.games ? awayStats.winRate : overallStats.winRate,
+    recent: recentRows,
+    recentHome: homeRows,
+    recentAway: awayRows,
+  };
+}
+
+function buildRecentStats(rows = []) {
   const games = rows.length;
+  if (!games) {
+    return {
+      games: 0,
+      goalsForPerGame: LEAGUE.goalsPerTeam,
+      goalsAgainstPerGame: LEAGUE.goalsPerTeam,
+      goalDiffPerGame: 0,
+      winRate: 0.33,
+      drawRate: 0.27,
+      pointsPerGame: 1.25,
+      cleanSheetRate: 0.28,
+      conversionRate: 0.12,
+    };
+  }
   const wins = rows.filter((row) => row.result === "W").length;
   const draws = rows.filter((row) => row.result === "D").length;
   const goalsFor = sum(rows.map((row) => row.gf));
   const goalsAgainst = sum(rows.map((row) => row.ga));
-  const homeRows = rows.filter((row) => row.isHome);
-  const awayRows = rows.filter((row) => !row.isHome);
   return {
-    name: team.name,
-    logo: team.logo,
     games,
     goalsForPerGame: goalsFor / games,
     goalsAgainstPerGame: goalsAgainst / games,
@@ -887,9 +927,6 @@ function buildContextFromFixtures(team, fixtures = []) {
     pointsPerGame: (wins * 3 + draws) / games,
     cleanSheetRate: rows.filter((row) => row.ga === 0).length / games,
     conversionRate: clamp((goalsFor / games) / LEAGUE.shotsPerTeam, 0.04, 0.22),
-    homeWinRate: homeRows.length ? homeRows.filter((row) => row.result === "W").length / homeRows.length : wins / games,
-    awayWinRate: awayRows.length ? awayRows.filter((row) => row.result === "W").length / awayRows.length : wins / games,
-    recent: rows,
   };
 }
 
@@ -912,6 +949,18 @@ function buildFallbackContext(team, game = {}) {
     conversionRate: 0.12,
     homeWinRate: 0.43,
     awayWinRate: 0.28,
+    venueLabel: team?.homeAway === "home" ? "local" : "visitante",
+    venueStats: {
+      games: hasScore ? 1 : 0,
+      goalsForPerGame: hasScore ? gf : LEAGUE.goalsPerTeam,
+      goalsAgainstPerGame: hasScore ? ga : LEAGUE.goalsPerTeam,
+      goalDiffPerGame: hasScore ? gf - ga : 0,
+      winRate: hasScore ? (gf > ga ? 1 : 0) : 0.33,
+      drawRate: hasScore ? (gf === ga ? 1 : 0) : 0.27,
+      pointsPerGame: hasScore ? (gf > ga ? 3 : gf === ga ? 1 : 0) : 1.25,
+      cleanSheetRate: hasScore ? (ga === 0 ? 1 : 0) : 0.28,
+      conversionRate: 0.12,
+    },
     recent: [],
   };
 }
@@ -1128,7 +1177,7 @@ function renderTeamCard(context, attack, defense, form, matchup, lineup, goals, 
       <div class="mt-4 grid gap-3 sm:grid-cols-2">
         ${metricBlock("Ataque", attack.label, scorePercent(attack.score), "Goles " + round2(attack.goalsFor))}
         ${metricBlock("Defensa", defense.label, scorePercent(defense.score), "GA " + round2(defense.goalsAgainst))}
-        ${metricBlock("Forma", form.label, scorePercent(form.score), "PPG " + round2(context.pointsPerGame))}
+        ${metricBlock("Forma", form.label, scorePercent(form.score), "PPG " + round2(form.pointsPerGame) + " | " + venueSampleLabel(context))}
         ${metricBlock("Matchup", matchup.label, scorePercent(matchup.score), "xG " + goals.toFixed(2))}
         ${metricBlock("Corners", corners.toFixed(2), "xC", "Base " + round2(attack.corners))}
         ${metricBlock("Tarjetas", Number.isFinite(cards) ? cards.toFixed(2) : "-", "xT", `Factor ${round2(lineup.cardFactor)}`)}
@@ -1167,6 +1216,7 @@ function renderFormula(model) {
   els.formulaBox.innerHTML = `
     <strong class="text-slate-900">Formula aplicada:</strong>
     ataque 30%, defensa 25%, forma 20%, localia 10% y matchup 15%.
+    Ataque, defensa y forma combinan ultimos 10 generales con ultimos 10 local/visitante segun la condicion del partido.
     Proyeccion de goles = promedio ofensivo propio x defensa rival, ajustado por forma, localia y debilidad defensiva.
     La matriz de marcadores usa Poisson con ajuste Dixon-Coles para resultados bajos.
     Corners = volumen ofensivo, tiros, tiros al arco, forma, localia y defensa rival; total evaluado con Poisson.
@@ -1330,6 +1380,11 @@ function confidenceFromProb(prob) {
   return "Baja";
 }
 
+function venueSampleLabel(context = {}) {
+  const label = context.venueLabel === "local" ? "Local" : "Visita";
+  return `${label} ${numberOr(context.venueStats?.games, 0)}/${RECENT_MATCH_LIMIT}`;
+}
+
 function calcularConfianza({ diff, winProbability, homeScore, awayScore }) {
   const modelGap = Math.abs(homeScore - awayScore);
   if (diff >= 0.75 && winProbability >= 0.58 && modelGap >= 0.08) return "Alta";
@@ -1375,6 +1430,14 @@ function normalizeLower(value, min, max) {
 
 function fallback(...values) {
   return values.find((value) => Number.isFinite(Number(value))) ?? 0;
+}
+
+function contextualMetric(context = {}, key, defaultValue) {
+  const overall = fallback(context[key], defaultValue);
+  const venue = context.venueStats || {};
+  if (!Number.isFinite(Number(venue[key])) || !numberOr(venue.games, 0)) return overall;
+  const venueWeight = clamp(numberOr(venue.games, 0) / RECENT_MATCH_LIMIT, 0, 0.65);
+  return numberOr(venue[key], overall) * venueWeight + overall * (1 - venueWeight);
 }
 
 function numberOr(value, fallbackValue) {
