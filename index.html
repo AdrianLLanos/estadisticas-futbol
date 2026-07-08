@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Comparador de Futbol</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["Inter", "ui-sans-serif", "system-ui", "Segoe UI", "Arial"],
+            },
+            boxShadow: {
+              panel: "0 18px 50px rgba(17, 24, 39, 0.10)",
+            },
+          },
+        },
+      };
+    </script>
+  </head>
+  <body class="min-h-screen bg-[#f5f7fb] text-slate-950 antialiased">
+    <main class="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
+      <header class="flex flex-col gap-4 border-b border-slate-200 pb-5 xl:flex-row xl:items-end xl:justify-between">
+        <div>
+          <div class="flex flex-wrap items-center gap-2">
+            <p class="text-sm font-semibold uppercase tracking-wide text-emerald-700">ESPN Soccer + API-Football</p>
+            <span id="sourceStatus" class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">Listo</span>
+          </div>
+          <h1 class="mt-1 text-3xl font-bold text-slate-950 sm:text-4xl">Comparador de Futbol</h1>
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-2 xl:flex xl:items-center">
+          <label class="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm">
+            <i data-lucide="calendar-days" class="h-4 w-4 text-slate-500"></i>
+            <span class="sr-only">Fecha</span>
+            <input id="dateInput" type="date" class="bg-transparent text-sm font-semibold text-slate-900 outline-none" />
+          </label>
+
+          <label class="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm">
+            <i data-lucide="trophy" class="h-4 w-4 text-slate-500"></i>
+            <span class="sr-only">Liga</span>
+            <select id="leagueFilter" class="min-w-44 bg-transparent text-sm font-semibold text-slate-900 outline-none">
+              <option value="all">Todas las ligas</option>
+            </select>
+          </label>
+
+          <label class="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm sm:col-span-2 xl:w-72">
+            <i data-lucide="key-round" class="h-4 w-4 text-slate-500"></i>
+            <span class="sr-only">API key</span>
+            <input id="apiKeyInput" type="password" class="w-full bg-transparent text-sm font-semibold text-slate-900 outline-none" placeholder="API-Football key" />
+          </label>
+
+          <button
+            id="loadBtn"
+            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 sm:col-span-2 xl:col-span-1"
+            type="button"
+          >
+            <i data-lucide="refresh-cw" class="h-4 w-4"></i>
+            Cargar jornada
+          </button>
+        </div>
+      </header>
+
+      <section class="grid flex-1 gap-5 lg:grid-cols-[390px_minmax(0,1fr)]">
+        <aside class="rounded-lg border border-slate-200 bg-white shadow-panel lg:sticky lg:top-5 lg:self-start">
+          <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+            <h2 class="text-sm font-bold uppercase tracking-wide text-slate-600">Partidos</h2>
+            <span id="gameCount" class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">0</span>
+          </div>
+          <div id="gamesList" class="max-h-[calc(100vh-105px)] min-h-[360px] overflow-y-auto p-3"></div>
+        </aside>
+
+        <section class="flex min-w-0 flex-col gap-5">
+          <div class="rounded-lg border border-slate-200 bg-white shadow-panel">
+            <div class="flex flex-col gap-4 border-b border-slate-200 p-4 xl:flex-row xl:items-center xl:justify-between">
+              <div id="matchupHeader" class="min-h-14">
+                <p class="text-sm font-semibold text-slate-500">Selecciona un partido</p>
+                <h2 class="mt-1 text-2xl font-bold text-slate-950">Sin comparacion</h2>
+              </div>
+              <button
+                id="compareBtn"
+                class="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-300"
+                type="button"
+                disabled
+              >
+                <i data-lucide="git-compare-arrows" class="h-4 w-4"></i>
+                Comparar equipos
+              </button>
+            </div>
+
+            <div id="statusBox" class="border-b border-slate-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+              Carga la jornada para comenzar.
+            </div>
+
+            <div id="summaryGrid" class="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4"></div>
+          </div>
+
+          <div id="teamGrid">
+            <div class="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-sm font-semibold text-slate-500 shadow-panel">
+              Compara un partido para ver forma, ataque, defensa y proyeccion.
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-slate-200 bg-white shadow-panel">
+            <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h2 class="text-sm font-bold uppercase tracking-wide text-slate-600">Estimaciones</h2>
+              <span id="sourceBadge" class="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700">Sin datos</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full min-w-[760px] text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th class="px-4 py-3">Mercado</th>
+                    <th class="px-4 py-3">Pronostico</th>
+                    <th class="px-4 py-3">Estimado</th>
+                    <th class="px-4 py-3">Confianza</th>
+                    <th class="px-4 py-3">Base</th>
+                  </tr>
+                </thead>
+                <tbody id="resultsBody" class="divide-y divide-slate-100">
+                  <tr>
+                    <td colspan="5" class="px-4 py-8 text-center font-semibold text-slate-500">Aun no hay comparacion.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="formulaBox" class="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600 shadow-panel">
+            <strong class="text-slate-900">Modelo:</strong> ataque, defensa, forma reciente, localia y matchup. La app esta enfocada solo en futbol.
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
