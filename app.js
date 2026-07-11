@@ -501,28 +501,74 @@ function parseFormation(value = "") {
     .filter((part) => Number.isFinite(part) && part > 0);
 }
 
-function calcularProbabilidadGanador({ homeGoals, awayGoals, homeScores, awayScores, matrix }) {
-  const weights = { attack: 0.27, defense: 0.22, form: 0.18, localia: 0.09, matchup: 0.14, lineup: 0.1 };
-  const homeComposite = weightedTeamScore(homeScores, weights);
-  const awayComposite = weightedTeamScore(awayScores, weights);
-  const compositeHomeProb = clamp(0.5 + (homeComposite - awayComposite) * 0.42, 0.2, 0.8);
-  const expectedHomeProb = clamp(0.5 + (homeGoals - awayGoals) * 0.18, 0.18, 0.82);
-  const homeProb = clamp(matrix.homeWinProb * 0.55 + expectedHomeProb * 0.25 + compositeHomeProb * 0.2, 0.12, 0.84);
-  const awayProb = clamp(matrix.awayWinProb * 0.62 + (1 - expectedHomeProb) * 0.23 + (1 - compositeHomeProb) * 0.15, 0.08, 0.8);
-  const drawProb = clamp(1 - homeProb - awayProb, 0.08, 0.34);
-  const total = homeProb + awayProb + drawProb;
-  const normalized = { home: homeProb / total, away: awayProb / total, draw: drawProb / total };
+function calcularProbabilidadesFinales({ homeGoals, awayGoals, homeComposite, awayComposite, matrix = {} }) {
+  const homeGoalExpectation = clamp(numberOr(homeGoals, 1.5), 0.2, 3.8);
+  const awayGoalExpectation = clamp(numberOr(awayGoals, 1.5), 0.2, 3.8);
+  const goalGap = clamp(homeGoalExpectation - awayGoalExpectation, -1.2, 1.2);
+  const compositeGap = clamp(numberOr(homeComposite, 0.5) - numberOr(awayComposite, 0.5), -0.6, 0.6);
+
+  const baseHome = clamp(0.5 + goalGap * 0.22 + compositeGap * 0.16, 0.08, 0.9);
+  const baseAway = clamp(0.5 - goalGap * 0.22 - compositeGap * 0.16, 0.08, 0.9);
+  const baseDraw = clamp(1 - baseHome - baseAway, 0.08, 0.42);
+
+  const homeWin = clamp(
+    baseHome * 0.55 + numberOr(matrix.homeWinProb, 0.33) * 0.3 + (homeGoalExpectation / (homeGoalExpectation + awayGoalExpectation || 1)) * 0.15,
+    0.08,
+    0.9
+  );
+  const awayWin = clamp(
+    baseAway * 0.55 + numberOr(matrix.awayWinProb, 0.33) * 0.3 + (awayGoalExpectation / (homeGoalExpectation + awayGoalExpectation || 1)) * 0.15,
+    0.08,
+    0.9
+  );
+  const draw = clamp(
+    numberOr(matrix.drawProb, 0.3) * 0.45 + baseDraw * 0.35 + (1 - Math.abs(goalGap) / 2.4) * 0.2,
+    0.08,
+    0.42
+  );
+
+  const total = homeWin + draw + awayWin || 1;
+  const normalized = {
+    home: homeWin / total,
+    draw: draw / total,
+    away: awayWin / total,
+  };
   const favorite = normalized.home >= normalized.away && normalized.home >= normalized.draw
     ? "home"
     : normalized.away >= normalized.draw
       ? "away"
       : "draw";
+  const favoriteKey = favorite === "away" ? "away" : favorite === "draw" ? "draw" : "home";
+
   return {
     favorite,
-    value: normalized[favorite],
+    value: normalized[favoriteKey],
+    homeWin: normalized.home,
+    awayWin: normalized.away,
+    draw: normalized.draw,
     homeProb: normalized.home,
     awayProb: normalized.away,
     drawProb: normalized.draw,
+    over2p5: clamp(numberOr(matrix.overProb, 0.5) * 0.7 + (homeGoalExpectation + awayGoalExpectation > 2.5 ? 0.2 : 0.05) + (Math.abs(goalGap) < 0.45 ? 0.1 : 0), 0.05, 0.95),
+    under2p5: clamp(1 - (numberOr(matrix.overProb, 0.5) * 0.7 + (homeGoalExpectation + awayGoalExpectation > 2.5 ? 0.2 : 0.05) + (Math.abs(goalGap) < 0.45 ? 0.1 : 0)), 0.05, 0.95),
+    btts: clamp(numberOr(matrix.bttsProb, 0.5) * 0.75 + (homeGoalExpectation > 0.8 && awayGoalExpectation > 0.8 ? 0.25 : 0), 0.05, 0.95),
+  };
+}
+
+function calcularProbabilidadGanador({ homeGoals, awayGoals, homeScores, awayScores, matrix }) {
+  const weights = { attack: 0.27, defense: 0.22, form: 0.18, localia: 0.09, matchup: 0.14, lineup: 0.1 };
+  const homeComposite = weightedTeamScore(homeScores, weights);
+  const awayComposite = weightedTeamScore(awayScores, weights);
+  const probabilities = calcularProbabilidadesFinales({
+    homeGoals,
+    awayGoals,
+    homeComposite,
+    awayComposite,
+    matrix,
+  });
+
+  return {
+    ...probabilities,
     homeComposite,
     awayComposite,
   };
@@ -1252,10 +1298,10 @@ function renderSummary(model) {
   const cards = [
     ["Favorito", model.favorite, `${Math.round(p.value * 100)}%`],
     ["Goles esperados", `${model.awayGoals.toFixed(2)} - ${model.homeGoals.toFixed(2)}`, `Total ${model.totalGoals}`],
-    ["Over/Under", model.totalLean, `${Math.round(Math.max(model.matrix.overProb, model.matrix.underProb) * 100)}%`],
+    ["Over/Under", model.totalLean, `${Math.round(Math.max(p.over2p5, p.under2p5) * 100)}%`],
     ["Corners", model.cornersLean, `Total ${model.totalCorners}`],
     ["Tarjetas", model.cardsLean, `Total ${model.totalCards}`],
-    ["BTTS", model.bttsLean, `${Math.round(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb) * 100)}%`],
+    ["BTTS", model.bttsLean, `${Math.round(p.btts * 100)}%`],
   ];
   els.summaryGrid.innerHTML = cards.map(([label, value, meta]) => `
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -1304,13 +1350,13 @@ function renderResults(model) {
   const p = model.probability;
   const rows = [
     ["Ganador", model.favorite, `${Math.round(p.value * 100)}%`, model.confidence, `Local ${pct(p.homeProb)} | Empate ${pct(p.drawProb)} | Visita ${pct(p.awayProb)}`],
-    ["Total goles", model.totalLean, model.totalGoals.toFixed(1), confidenceFromProb(Math.max(model.matrix.overProb, model.matrix.underProb)), `Over ${pct(model.matrix.overProb)} | Under ${pct(model.matrix.underProb)}`],
+    ["Total goles", model.totalLean, model.totalGoals.toFixed(1), confidenceFromProb(Math.max(p.over2p5, p.under2p5)), `Over ${pct(p.over2p5)} | Under ${pct(p.under2p5)}`],
     ["Total corners", model.cornersLean, model.totalCorners.toFixed(1), confidenceFromProb(Math.max(model.cornersMatrix.overProb, model.cornersMatrix.underProb)), `Over ${pct(model.cornersMatrix.overProb)} | Under ${pct(model.cornersMatrix.underProb)}`],
     ["Total tarjetas", model.cardsLean, model.totalCards.toFixed(1), confidenceFromProb(Math.max(model.cardsMatrix.overProb, model.cardsMatrix.underProb)), `Over ${pct(model.cardsMatrix.overProb)} | Under ${pct(model.cardsMatrix.underProb)}`],
     ...(model.h2h?.available ? [["H2H", model.h2h.trend, `${round2(model.h2h.avgGoals)} goles`, h2hConfidence(model.h2h), `${model.h2h.games} partidos | Over ${pct(model.h2h.over25Rate)} | BTTS ${pct(model.h2h.bttsRate)}`]] : []),
     ["Alineaciones", `${model.awayLineup.label} / ${model.homeLineup.label}`, `${model.awayLineup.formation} - ${model.homeLineup.formation}`, lineupConfidence(model), `Bajas: ${model.awayLineup.injuriesCount} visita | ${model.homeLineup.injuriesCount} local`],
     ["Rendimiento jugadores", `${model.awayLineup.performanceLabel} / ${model.homeLineup.performanceLabel}`, `${scorePercent(model.awayLineup.performanceScore)} - ${scorePercent(model.homeLineup.performanceScore)}`, performanceConfidence(model), "Rating, minutos, goles/asistencias, defensa y disciplina"],
-    ["Ambos anotan", model.bttsLean, `Si ${pct(model.matrix.bttsProb)} | No ${pct(1 - model.matrix.bttsProb)}`, confidenceFromProb(Math.max(model.matrix.bttsProb, 1 - model.matrix.bttsProb)), "Poisson con goles esperados de ambos equipos"],
+    ["Ambos anotan", model.bttsLean, `Si ${pct(p.btts)} | No ${pct(1 - p.btts)}`, confidenceFromProb(Math.max(p.btts, 1 - p.btts)), "Poisson con goles esperados de ambos equipos"],
     ["Marcador probable", model.matrix.topScores.map((s) => `${s.a}-${s.h}`).join(" / "), `${model.awayGoals.toFixed(2)}-${model.homeGoals.toFixed(2)}`, "Media", "Marcadores ordenados por probabilidad"],
   ];
   els.resultsBody.innerHTML = rows.map(([market, pick, estimated, confidence, base]) => `
