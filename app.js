@@ -86,7 +86,8 @@ async function loadSlate() {
 
   try {
     const date = els.dateInput.value || toDateInputValue(new Date());
-    let espnGames = Array.isArray(await cargarJuegosEspnFutbolPorFecha(date)) ? await cargarJuegosEspnFutbolPorFecha(date) : [];
+    let espnResult = await cargarJuegosEspnFutbolPorFecha(date);
+    let espnGames = Array.isArray(espnResult?.events) ? espnResult.events : [];
     // If ESPN returned no games for the selected date, try nearby dates (±2 days)
     if (!espnGames.length) {
       const offsets = [-2, -1, 1, 2];
@@ -95,9 +96,10 @@ async function loadSlate() {
         d.setDate(d.getDate() + offsets[i]);
         const tryDate = toDateInputValue(d);
         const tryResult = await cargarJuegosEspnFutbolPorFecha(tryDate);
-        espnGames = Array.isArray(tryResult) ? tryResult : [];
+        espnGames = Array.isArray(tryResult?.events) ? tryResult.events : [];
         if (espnGames.length) {
           setStatus(`No hay partidos en ${date}. Usando ${tryDate} como alternativa.`, "warn");
+          espnResult = tryResult;
           break;
         }
       }
@@ -108,7 +110,9 @@ async function loadSlate() {
     renderGames();
     renderMatchupHeader(getSelectedGame());
     els.compareBtn.disabled = !state.selectedId;
-    els.sourceStatus.textContent = `ESPN ${espnGames.length}`;
+    const attempted = espnResult?.attempted || 0;
+    const leaguesWithEvents = espnResult?.leaguesWithEvents || 0;
+    els.sourceStatus.textContent = `ESPN ${espnGames.length} partidos — consultadas ${attempted} ligas (${leaguesWithEvents} con partidos)`;
 
     if (!state.games.length) {
       setStatus("No se encontraron partidos para la fecha seleccionada.", "warn");
@@ -645,26 +649,40 @@ async function cargarJuegosEspnFutbolPorFecha(fecha) {
 
   const leagues = Array.isArray(state.espnLeagues) && state.espnLeagues.length ? state.espnLeagues : FOOTBALL_LEAGUES;
   const events = [];
+  let attempted = 0;
+  let leaguesWithEvents = 0;
+  const leagueResults = [];
   for (let i = 0; i < leagues.length; i += ESPN_BATCH_SIZE) {
     const batch = leagues.slice(i, i + ESPN_BATCH_SIZE);
     const results = await Promise.allSettled(batch.map(async (league) => {
       const slug = league.slug || league.value || league.label;
-      if (!slug) return [];
+      if (!slug) return { slug, events: [] };
+      attempted++;
       const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(slug)}/scoreboard?dates=${encodeURIComponent(date)}&limit=300&lang=es&region=mx&tz=${encodeURIComponent(timezone)}`;
       try {
         const response = await fetch(url);
-        if (!response.ok) return [];
+        if (!response.ok) return { slug, events: [] };
         const data = await response.json();
         const leagueLabel = data?.leagues?.[0]?.name || league.label || league.name || slug;
-        return (data.events || []).map((event) => ({ ...event, leagueSlug: slug, leagueLabel }));
+        const ev = (data.events || []).map((event) => ({ ...event, leagueSlug: slug, leagueLabel }));
+        if (ev.length) leaguesWithEvents++;
+        return { slug, events: ev };
       } catch (e) {
-        return [];
+        return { slug, events: [] };
       }
     }));
-    events.push(...results.flatMap((result) => result.status === "fulfilled" ? result.value : []));
+    results.forEach((r) => {
+      if (r.status === "fulfilled" && r.value && Array.isArray(r.value.events)) {
+        events.push(...r.value.events);
+        leagueResults.push({ slug: r.value.slug, count: r.value.events.length });
+      } else if (r.status === "fulfilled" && r.value && Array.isArray(r.value)) {
+        // backwards compatibility
+        events.push(...r.value);
+      }
+    });
   }
 
-  return events;
+  return { events, attempted, leaguesWithEvents, leagueResults };
 }
 
 async function fetchEspnLeagues() {
