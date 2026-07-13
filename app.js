@@ -88,6 +88,7 @@ async function loadSlate() {
     const date = els.dateInput.value || toDateInputValue(new Date());
     let espnResult = await cargarJuegosEspnFutbolPorFecha(date);
     let espnGames = Array.isArray(espnResult?.events) ? espnResult.events : [];
+    
     // If ESPN returned no games for the selected date, try nearby dates (±2 days)
     if (!espnGames.length) {
       const offsets = [-2, -1, 1, 2];
@@ -700,6 +701,8 @@ async function cargarJuegosEspnFutbolPorFecha(fecha) {
 
   return { events, attempted, leaguesWithEvents, leagueResults };
 }
+
+// FootyStats adapter removed — ESPN-only integration
 
 async function fetchEspnLeagues() {
   const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/leagues?lang=es&region=mx`;
