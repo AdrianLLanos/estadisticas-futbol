@@ -45,6 +45,7 @@ const LEAGUE = {
 const state = {
   games: [],
   selectedId: null,
+  espnLeagues: null,
 };
 
 const els = {
@@ -634,21 +635,47 @@ function calcularTotalPoisson(lambda, totalLine = 8.5) {
 async function cargarJuegosEspnFutbolPorFecha(fecha) {
   const timezone = getTimezone();
   const date = String(fecha).replace(/-/g, "");
+  // Ensure we have the list of leagues from ESPN (fetch once per session)
+  try {
+    if (!state.espnLeagues) await fetchEspnLeagues();
+  } catch (e) {
+    // fall back to built-in list
+    state.espnLeagues = FOOTBALL_LEAGUES;
+  }
 
+  const leagues = Array.isArray(state.espnLeagues) && state.espnLeagues.length ? state.espnLeagues : FOOTBALL_LEAGUES;
   const events = [];
-  for (let i = 0; i < FOOTBALL_LEAGUES.length; i += ESPN_BATCH_SIZE) {
-    const batch = FOOTBALL_LEAGUES.slice(i, i + ESPN_BATCH_SIZE);
+  for (let i = 0; i < leagues.length; i += ESPN_BATCH_SIZE) {
+    const batch = leagues.slice(i, i + ESPN_BATCH_SIZE);
     const results = await Promise.allSettled(batch.map(async (league) => {
-      const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league.slug}/scoreboard?dates=${encodeURIComponent(date)}&limit=300&lang=es&region=mx&tz=${encodeURIComponent(timezone)}`;
-      const response = await fetch(url);
-      if (!response.ok) return [];
-      const data = await response.json();
-      return (data.events || []).map((event) => ({ ...event, leagueSlug: league.slug, leagueLabel: data?.leagues?.[0]?.name || league.label }));
+      const slug = league.slug || league.value || league.label;
+      if (!slug) return [];
+      const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(slug)}/scoreboard?dates=${encodeURIComponent(date)}&limit=300&lang=es&region=mx&tz=${encodeURIComponent(timezone)}`;
+      try {
+        const response = await fetch(url);
+        if (!response.ok) return [];
+        const data = await response.json();
+        const leagueLabel = data?.leagues?.[0]?.name || league.label || league.name || slug;
+        return (data.events || []).map((event) => ({ ...event, leagueSlug: slug, leagueLabel }));
+      } catch (e) {
+        return [];
+      }
     }));
     events.push(...results.flatMap((result) => result.status === "fulfilled" ? result.value : []));
   }
 
   return events;
+}
+
+async function fetchEspnLeagues() {
+  const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/leagues?lang=es&region=mx`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('No se pudo obtener la lista de ligas de ESPN');
+  const data = await response.json();
+  const leagues = (data.leagues || []).map((l) => ({ slug: l.slug || l.uid || l.abbreviation || l.id, label: l.name || l.abbreviation || l.displayName || l.slug }));
+  // Keep only entries with a usable slug
+  state.espnLeagues = leagues.filter((l) => l.slug);
+  return state.espnLeagues;
 }
 
 async function cargarResumenPartido(game) {
@@ -756,7 +783,65 @@ function aplicarAjusteGoles(goals, factor) {
 }
 
 async function cargarDisponibilidadPartido(game) {
-  return buildNeutralAvailability(game);
+  try {
+    if (!game?.espnEvent?.id || !game?.espnEvent?.leagueSlug) return buildNeutralAvailability(game);
+    const espnSummary = await cargarResumenEspn(game.espnEvent);
+    if (!espnSummary) return buildNeutralAvailability(game);
+
+    // Extract potential lineup structures from different summary shapes
+    const lineups = espnSummary?.lineups || espnSummary?.gamepackage?.lineups || espnSummary?.boxscore?.lineups || [];
+    const injuries = espnSummary?.injuries || espnSummary?.gamepackage?.injuries || espnSummary?.boxscore?.injuries || [];
+    const performance = buildPerformanceFromEspn(espnSummary, game);
+
+    return combinarDisponibilidad(lineups, injuries, performance, game);
+  } catch (e) {
+    return buildNeutralAvailability(game);
+  }
+}
+
+function buildPerformanceFromEspn(summary = {}, game = {}) {
+  const out = { home: { byKey: {}, top: [] }, away: { byKey: {}, top: [] } };
+  try {
+    const teams = summary?.boxscore?.teams || [];
+    teams.forEach((teamInfo) => {
+      const name = teamInfo?.team?.displayName || teamInfo?.team?.name || "";
+      const side = sameTeam(name, game.home.name) ? "home" : sameTeam(name, game.away.name) ? "away" : null;
+      if (!side) return;
+
+      const players = teamInfo?.players || teamInfo?.athletes || teamInfo?.statistics || [];
+      players.forEach((p) => {
+        const player = p?.player || p?.athlete || p || {};
+        const id = player?.id || p?.id || null;
+        const playerName = player?.fullName || player?.displayName || player?.name || "Jugador";
+
+        // Try to infer a simple performance score from available fields
+        let score = null;
+        // rating fields commonly used
+        score = numberOr(p?.rating, score ?? null) || numberOr(p?.stats?.rating, score ?? null) || numberOr(p?.player?.rating, score ?? null) || null;
+        // goals/assists/minutes fallback
+        if (!Number.isFinite(score)) {
+          const goals = numberOr(p?.stats?.goals, p?.goals, 0);
+          const assists = numberOr(p?.stats?.assists, p?.assists, 0);
+          const minutes = numberOr(p?.stats?.minutes, p?.minutes, 90);
+          score = clamp((goals * 0.6 + assists * 0.3 + Math.min(minutes, 90) / 90 * 0.1) / 2.5, 0, 1);
+        }
+
+        const attackScore = score;
+        const defenseScore = score;
+        const cardRate = numberOr(p?.stats?.yellowCards, p?.yellow, 0) + numberOr(p?.stats?.redCards, p?.red, 0) ? 0.3 : 0.12;
+        const key = id ? `id:${id}` : `name:${normalizeText(playerName)}`;
+
+        const item = { id, name: playerName, score, attackScore, defenseScore, cardRate };
+        out[side].byKey[key] = item;
+        out[side].top.push(item);
+      });
+
+      out[side].top.sort((a, b) => numberOr(b.score, 0) - numberOr(a.score, 0));
+    });
+  } catch (e) {
+    // ignore and return empty performance
+  }
+  return { home: { byKey: out.home.byKey, top: out.home.top.slice(0, 11) }, away: { byKey: out.away.byKey, top: out.away.top.slice(0, 11) } };
 }
 
 function combinarDisponibilidad(lineups = [], injuries = [], performance = {}, game) {
