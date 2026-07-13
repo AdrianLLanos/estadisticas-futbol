@@ -85,8 +85,22 @@ async function loadSlate() {
 
   try {
     const date = els.dateInput.value || toDateInputValue(new Date());
-    const espnResult = await cargarJuegosEspnFutbolPorFecha(date);
-    const espnGames = Array.isArray(espnResult) ? espnResult : [];
+    let espnGames = Array.isArray(await cargarJuegosEspnFutbolPorFecha(date)) ? await cargarJuegosEspnFutbolPorFecha(date) : [];
+    // If ESPN returned no games for the selected date, try nearby dates (±2 days)
+    if (!espnGames.length) {
+      const offsets = [-2, -1, 1, 2];
+      for (let i = 0; i < offsets.length && !espnGames.length; i++) {
+        const d = new Date(date);
+        d.setDate(d.getDate() + offsets[i]);
+        const tryDate = toDateInputValue(d);
+        const tryResult = await cargarJuegosEspnFutbolPorFecha(tryDate);
+        espnGames = Array.isArray(tryResult) ? tryResult : [];
+        if (espnGames.length) {
+          setStatus(`No hay partidos en ${date}. Usando ${tryDate} como alternativa.`, "warn");
+          break;
+        }
+      }
+    }
     state.games = mergeFootballGames([], espnGames).sort((a, b) => new Date(a.date) - new Date(b.date));
     state.selectedId = state.games[0]?.id || null;
 
