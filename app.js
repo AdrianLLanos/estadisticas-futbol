@@ -1,6 +1,3 @@
-const DEFAULT_API_FOOTBALL_KEY = "0f4bd89af94f37638906a3de25f55d91";
-const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
-const API_FOOTBALL_DAILY_LIMIT = 95;
 const ESPN_BATCH_SIZE = 5;
 const DIXON_COLES_RHO = -0.08;
 const RECENT_MATCH_LIMIT = 10;
@@ -48,14 +45,11 @@ const LEAGUE = {
 const state = {
   games: [],
   selectedId: null,
-  apiUsageDate: "",
-  apiRequestsToday: 0,
 };
 
 const els = {
   dateInput: document.querySelector("#dateInput"),
   leagueFilter: document.querySelector("#leagueFilter"),
-  apiKeyInput: document.querySelector("#apiKeyInput"),
   loadBtn: document.querySelector("#loadBtn"),
   compareBtn: document.querySelector("#compareBtn"),
   gamesList: document.querySelector("#gamesList"),
@@ -72,7 +66,6 @@ const els = {
 
 document.addEventListener("DOMContentLoaded", () => {
   els.dateInput.value = toDateInputValue(new Date());
-  els.apiKeyInput.value = DEFAULT_API_FOOTBALL_KEY;
   FOOTBALL_LEAGUES.forEach((league) => {
     const option = document.createElement("option");
     option.value = league.slug;
@@ -92,23 +85,15 @@ async function loadSlate() {
 
   try {
     const date = els.dateInput.value || toDateInputValue(new Date());
-    const [apiResult, espnResult] = await Promise.allSettled([
-      cargarJuegosApiFootballPorFecha(date),
-      cargarJuegosEspnFutbolPorFecha(date),
-    ]);
-
-    const apiGames = apiResult.status === "fulfilled" ? apiResult.value : [];
-    const espnGames = espnResult.status === "fulfilled" ? espnResult.value : [];
-    state.games = mergeFootballGames(apiGames, espnGames).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const espnResult = await cargarJuegosEspnFutbolPorFecha(date);
+    const espnGames = Array.isArray(espnResult) ? espnResult : [];
+    state.games = mergeFootballGames([], espnGames).sort((a, b) => new Date(a.date) - new Date(b.date));
     state.selectedId = state.games[0]?.id || null;
 
     renderGames();
     renderMatchupHeader(getSelectedGame());
     els.compareBtn.disabled = !state.selectedId;
-
-    const apiMsg = apiResult.status === "fulfilled" ? `API-Football ${apiGames.length}` : "API-Football sin respuesta";
-    const espnMsg = espnResult.status === "fulfilled" ? `ESPN ${espnGames.length}` : "ESPN sin respuesta";
-    els.sourceStatus.textContent = `${apiMsg} | ${espnMsg}`;
+    els.sourceStatus.textContent = `ESPN ${espnGames.length}`;
 
     if (!state.games.length) {
       setStatus("No se encontraron partidos para la fecha seleccionada.", "warn");
@@ -632,15 +617,6 @@ function calcularTotalPoisson(lambda, totalLine = 8.5) {
   };
 }
 
-async function cargarJuegosApiFootballPorFecha(fecha) {
-  const apiKey = getApiFootballKey();
-  if (!apiKey) return [];
-  const timezone = getTimezone();
-  assertApiFootballQuotaDisponible();
-  const data = await fetchApiFootball(`/fixtures?date=${encodeURIComponent(fecha)}&timezone=${encodeURIComponent(timezone)}`);
-  return data?.response || [];
-}
-
 async function cargarJuegosEspnFutbolPorFecha(fecha) {
   const timezone = getTimezone();
   const date = String(fecha).replace(/-/g, "");
@@ -662,31 +638,17 @@ async function cargarJuegosEspnFutbolPorFecha(fecha) {
 }
 
 async function cargarResumenPartido(game) {
-  const [apiSummary, espnSummary] = await Promise.allSettled([
-    game.apiGame?.fixture?.id ? cargarResumenApiFootball(game.apiGame.fixture.id) : null,
-    game.espnEvent?.id && game.espnEvent?.leagueSlug ? cargarResumenEspn(game.espnEvent) : null,
-  ]);
-  return combinarResumenes(
-    apiSummary.status === "fulfilled" ? apiSummary.value : null,
-    espnSummary.status === "fulfilled" ? espnSummary.value : null,
-    game
-  );
+  if (!game?.espnEvent?.id || !game?.espnEvent?.leagueSlug) {
+    return { provider: "ESPN", homeStats: {}, awayStats: {} };
+  }
+
+  const espnSummary = await cargarResumenEspn(game.espnEvent);
+  return combinarResumenes(null, espnSummary, game);
 }
 
 async function cargarH2HPartido(game) {
   if (!debeUsarH2H(game)) return buildNeutralH2H();
-  const homeId = game?.home?.apiId;
-  const awayId = game?.away?.apiId;
-  if (!homeId || !awayId) return buildNeutralH2H();
-
-  try {
-    assertApiFootballQuotaDisponible();
-    const data = await fetchApiFootball(`/fixtures/headtohead?h2h=${encodeURIComponent(`${homeId}-${awayId}`)}&last=${H2H_MATCH_LIMIT}&timezone=${encodeURIComponent(getTimezone())}`);
-    return buildH2HContext(game, data?.response || []);
-  } catch (error) {
-    console.warn("No se pudo cargar H2H:", game?.home?.name, game?.away?.name, error);
-    return buildNeutralH2H();
-  }
+  return buildNeutralH2H();
 }
 
 function buildH2HContext(game, fixtures = []) {
@@ -780,158 +742,7 @@ function aplicarAjusteGoles(goals, factor) {
 }
 
 async function cargarDisponibilidadPartido(game) {
-  const fixtureId = game?.apiGame?.fixture?.id || game?.apiId;
-  if (!fixtureId) return buildNeutralAvailability(game);
-
-  const [lineupsResult, injuriesResult, homePerformanceResult, awayPerformanceResult] = await Promise.allSettled([
-    cargarAlineacionesApiFootball(fixtureId),
-    cargarBajasApiFootball(fixtureId),
-    cargarRendimientoJugadoresEquipo(game?.home, game),
-    cargarRendimientoJugadoresEquipo(game?.away, game),
-  ]);
-  return combinarDisponibilidad(
-    lineupsResult.status === "fulfilled" ? lineupsResult.value : [],
-    injuriesResult.status === "fulfilled" ? injuriesResult.value : [],
-    {
-      home: homePerformanceResult.status === "fulfilled" ? homePerformanceResult.value : buildEmptyPerformance(),
-      away: awayPerformanceResult.status === "fulfilled" ? awayPerformanceResult.value : buildEmptyPerformance(),
-    },
-    game
-  );
-}
-
-async function cargarAlineacionesApiFootball(fixtureId) {
-  assertApiFootballQuotaDisponible();
-  const data = await fetchApiFootball(`/fixtures/lineups?fixture=${encodeURIComponent(fixtureId)}`);
-  return data?.response || [];
-}
-
-async function cargarBajasApiFootball(fixtureId) {
-  assertApiFootballQuotaDisponible();
-  const data = await fetchApiFootball(`/injuries?fixture=${encodeURIComponent(fixtureId)}`);
-  return data?.response || [];
-}
-
-async function cargarRendimientoJugadoresEquipo(team = {}, game = {}) {
-  if (!team?.apiId) return buildEmptyPerformance();
-  const season = getApiFootballSeason(game);
-  const leagueId = game?.apiGame?.league?.id;
-  if (!season) return buildEmptyPerformance();
-
-  const allPlayers = [];
-  let page = 1;
-  let totalPages = 1;
-  do {
-    assertApiFootballQuotaDisponible();
-    const leagueParam = leagueId ? `&league=${encodeURIComponent(leagueId)}` : "";
-    const data = await fetchApiFootball(`/players?team=${encodeURIComponent(team.apiId)}&season=${encodeURIComponent(season)}${leagueParam}&page=${page}`);
-    allPlayers.push(...(data?.response || []));
-    totalPages = Math.min(Number(data?.paging?.total) || 1, 4);
-    page += 1;
-  } while (page <= totalPages);
-
-  return buildPlayerPerformance(allPlayers, team, leagueId);
-}
-
-function buildEmptyPerformance() {
-  return { byKey: {}, top: [] };
-}
-
-function buildPlayerPerformance(players = [], team = {}, leagueId = null) {
-  const byKey = {};
-  const items = players.map((entry) => {
-    const stat = selectBestPlayerStat(entry.statistics || [], team, leagueId);
-    if (!stat) return null;
-    return normalizePlayerPerformance(entry.player || {}, stat);
-  }).filter(Boolean);
-
-  items.forEach((item) => {
-    if (item.id) byKey[`id:${item.id}`] = item;
-    byKey[`name:${normalizeText(item.name)}`] = item;
-  });
-
-  return {
-    byKey,
-    top: items
-      .filter((item) => item.minutes > 0 || item.appearances > 0 || item.rating)
-      .sort((a, b) => (b.minutes - a.minutes) || (b.score - a.score))
-      .slice(0, 16),
-  };
-}
-
-function selectBestPlayerStat(stats = [], team = {}, leagueId = null) {
-  const sameTeamStats = stats.filter((stat) => {
-    const statTeamId = String(stat?.team?.id || "");
-    return !team?.apiId || statTeamId === String(team.apiId);
-  });
-  if (leagueId) {
-    const leagueStat = sameTeamStats.find((stat) => String(stat?.league?.id || "") === String(leagueId));
-    if (leagueStat) return leagueStat;
-  }
-  return sameTeamStats.find((stat) => Number(stat?.games?.minutes) > 0 || Number(stat?.games?.appearences) > 0) || sameTeamStats[0] || null;
-}
-
-function normalizePlayerPerformance(player = {}, stat = {}) {
-  const appearances = numberOr(stat?.games?.appearences, 0);
-  const lineups = numberOr(stat?.games?.lineups, 0);
-  const minutes = numberOr(stat?.games?.minutes, 0);
-  const rating = numberOr(stat?.games?.rating, NaN);
-  const goals = numberOr(stat?.goals?.total, 0);
-  const assists = numberOr(stat?.goals?.assists, 0);
-  const shotsOn = numberOr(stat?.shots?.on, 0);
-  const keyPasses = numberOr(stat?.passes?.key, 0);
-  const tackles = numberOr(stat?.tackles?.total, 0);
-  const interceptions = numberOr(stat?.tackles?.interceptions, 0);
-  const blocks = numberOr(stat?.tackles?.blocks, 0);
-  const duelsTotal = numberOr(stat?.duels?.total, 0);
-  const duelsWon = numberOr(stat?.duels?.won, 0);
-  const yellow = numberOr(stat?.cards?.yellow, 0);
-  const red = numberOr(stat?.cards?.red, 0) + numberOr(stat?.cards?.yellowred, 0);
-  const per90Base = Math.max(minutes / 90, appearances, 1);
-  const ratingScore = Number.isFinite(rating) ? normalizeHigher(rating, 5.8, 7.6) : 0.5;
-  const regularityScore = clamp(minutes / Math.max(appearances * 90, 1), 0, 1) * 0.55 + normalizeHigher(lineups, 0, Math.max(appearances, 1)) * 0.45;
-  const offensiveScore =
-    normalizeHigher((goals + assists) / per90Base, 0, 0.75) * 0.55 +
-    normalizeHigher((shotsOn + keyPasses) / per90Base, 0, 3.2) * 0.45;
-  const duelRate = duelsTotal > 0 ? duelsWon / duelsTotal : 0.5;
-  const defensiveScore =
-    normalizeHigher((tackles + interceptions + blocks) / per90Base, 0, 5.5) * 0.62 +
-    normalizeHigher(duelRate, 0.35, 0.72) * 0.38;
-  const cardRate = (yellow + red * 2) / per90Base;
-  const disciplineScore = normalizeLower(cardRate, 0.05, 0.55);
-  const score = clamp(
-    ratingScore * 0.4 +
-      regularityScore * 0.2 +
-      offensiveScore * 0.18 +
-      defensiveScore * 0.14 +
-      disciplineScore * 0.08,
-    0,
-    1
-  );
-  const attackScore = clamp(ratingScore * 0.35 + offensiveScore * 0.45 + regularityScore * 0.2, 0, 1);
-  const defenseScore = clamp(ratingScore * 0.35 + defensiveScore * 0.45 + regularityScore * 0.2, 0, 1);
-
-  return {
-    id: player.id,
-    name: player.name || "Jugador",
-    position: stat?.games?.position || "",
-    rating: Number.isFinite(rating) ? rating : null,
-    appearances,
-    minutes,
-    score,
-    attackScore,
-    defenseScore,
-    cardRate,
-    level: performanceLevel(score),
-  };
-}
-
-function getApiFootballSeason(game = {}) {
-  const season = game?.apiGame?.league?.season;
-  if (season) return season;
-  const date = new Date(game?.date || Date.now());
-  if (Number.isNaN(date.getTime())) return new Date().getFullYear();
-  return date.getMonth() >= 6 ? date.getFullYear() : date.getFullYear() - 1;
+  return buildNeutralAvailability(game);
 }
 
 function combinarDisponibilidad(lineups = [], injuries = [], performance = {}, game) {
@@ -991,12 +802,6 @@ function getSideForTeam(team = {}, game) {
   return "";
 }
 
-async function cargarResumenApiFootball(fixtureId) {
-  assertApiFootballQuotaDisponible();
-  const data = await fetchApiFootball(`/fixtures/statistics?fixture=${encodeURIComponent(fixtureId)}`);
-  return { provider: "API-Football", statistics: data?.response || [] };
-}
-
 async function cargarResumenEspn(event) {
   const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(event.leagueSlug)}/summary?event=${encodeURIComponent(event.id)}&lang=es&region=mx`;
   const response = await fetch(url);
@@ -1005,17 +810,7 @@ async function cargarResumenEspn(event) {
 }
 
 async function getTeamContext(team, game) {
-  if (!team?.apiId) return buildFallbackContext(team, game);
-
-  try {
-    assertApiFootballQuotaDisponible();
-    const data = await fetchApiFootball(`/fixtures?team=${encodeURIComponent(team.apiId)}&last=${RECENT_FETCH_LIMIT}&timezone=${encodeURIComponent(getTimezone())}`);
-    const fixtures = (data?.response || []).filter((fixture) => Number.isFinite(Number(fixture?.goals?.home)) && Number.isFinite(Number(fixture?.goals?.away)));
-    return buildContextFromFixtures(team, fixtures);
-  } catch (error) {
-    console.warn("No se pudo cargar forma reciente del equipo:", team.name, error);
-    return buildFallbackContext(team, game);
-  }
+  return buildFallbackContext(team, game);
 }
 
 function buildContextFromFixtures(team, fixtures = []) {
@@ -1123,23 +918,12 @@ function buildFallbackContext(team, game = {}) {
 }
 
 function combinarResumenes(apiSummary, espnSummary, game) {
-  const apiStats = mapApiFootballStats(apiSummary, game);
   const espnStats = mapEspnStats(espnSummary, game);
   return {
-    provider: [apiSummary?.provider, espnSummary?.provider].filter(Boolean).join(" + "),
-    homeStats: { ...espnStats.home, ...apiStats.home },
-    awayStats: { ...espnStats.away, ...apiStats.away },
+    provider: espnSummary?.provider || "ESPN",
+    homeStats: { ...espnStats.home },
+    awayStats: { ...espnStats.away },
   };
-}
-
-function mapApiFootballStats(summary, game) {
-  const result = { home: {}, away: {} };
-  (summary?.statistics || []).forEach((teamInfo) => {
-    const side = sameTeam(teamInfo?.team?.name, game.home.name) ? "home" : sameTeam(teamInfo?.team?.name, game.away.name) ? "away" : null;
-    if (!side) return;
-    result[side] = normalizeStatsList(teamInfo.statistics || []);
-  });
-  return result;
 }
 
 function mapEspnStats(summary, game) {
@@ -1170,38 +954,19 @@ function normalizeStatsList(stats = []) {
 }
 
 function mergeFootballGames(apiGames = [], espnGames = []) {
-  const merged = apiGames.map(normalizeApiGame).filter(Boolean);
+  const merged = [];
   espnGames.map(normalizeEspnGame).filter(Boolean).forEach((espnGame) => {
-    const found = merged.find((apiGame) => gamesMatch(apiGame, espnGame));
+    const found = merged.find((candidate) => gamesMatch(candidate, espnGame));
     if (found) {
       found.espnEvent = espnGame.espnEvent;
       found.espnId = espnGame.espnId;
-      found.provider = "API-Football + ESPN";
+      found.provider = "ESPN";
       found.leagueSlug = found.leagueSlug || espnGame.leagueSlug;
     } else {
       merged.push(espnGame);
     }
   });
   return merged;
-}
-
-function normalizeApiGame(game) {
-  const home = game?.teams?.home;
-  const away = game?.teams?.away;
-  if (!home?.name || !away?.name) return null;
-  return {
-    id: `api-${game.fixture?.id}`,
-    apiGame: game,
-    apiId: game.fixture?.id,
-    espnEvent: null,
-    date: game.fixture?.date || "",
-    league: game.league?.name || "Liga",
-    leagueSlug: "",
-    provider: "API-Football",
-    home: { name: home.name, logo: home.logo || "", apiId: home.id, homeAway: "home" },
-    away: { name: away.name, logo: away.logo || "", apiId: away.id, homeAway: "away" },
-    status: game.fixture?.status?.long || game.fixture?.status?.short || "Programado",
-  };
 }
 
 function normalizeEspnGame(event) {
@@ -1379,7 +1144,7 @@ function renderFormula(model) {
     H2H se aplica solo en partidos futuros como ajuste pequeno, segun goles, Over/Under y BTTS de enfrentamientos directos.
     La matriz de marcadores usa Poisson con ajuste Dixon-Coles para resultados bajos.
     Corners = volumen ofensivo, tiros, tiros al arco, forma, localia y defensa rival; total evaluado con Poisson.
-    Alineacion = titulares, formacion, suplentes y bajas de API-Football aplicadas como factor de ataque/defensa.
+    Alineacion = disponibilidad del plantel y datos de forma cuando estan disponibles, usados como factor de ataque/defensa.
     Rendimiento = rating, minutos, aportes ofensivos/defensivos y disciplina de jugadores.
     Tarjetas = disciplina del XI/plantel, presion defensiva, forma y condicion local/visitante.
     El modelo esta enfocado solo en futbol.
@@ -1396,44 +1161,6 @@ function clearResults(resetHeader = true) {
 
 function getSelectedGame() {
   return state.games.find((game) => game.id === state.selectedId) || null;
-}
-
-async function fetchApiFootball(path) {
-  const response = await fetch(`${API_FOOTBALL_BASE_URL}${path}`, {
-    headers: { "x-apisports-key": getApiFootballKey() },
-  });
-  registrarApiFootballRequest();
-  if (!response.ok) throw new Error(`API-Football respondio ${response.status}`);
-  const data = await response.json();
-  const errors = data?.errors;
-  const hasErrors = Array.isArray(errors) ? errors.length > 0 : errors && Object.keys(errors).length > 0;
-  if (hasErrors) throw new Error(`API-Football devolvio error: ${JSON.stringify(errors)}`);
-  return data;
-}
-
-function getApiFootballKey() {
-  return (els.apiKeyInput?.value || DEFAULT_API_FOOTBALL_KEY).trim();
-}
-
-function assertApiFootballQuotaDisponible() {
-  const usadas = getApiFootballUsage();
-  if (usadas >= API_FOOTBALL_DAILY_LIMIT) {
-    throw new Error(`Limite diario de API-Football alcanzado (${usadas}/${API_FOOTBALL_DAILY_LIMIT}).`);
-  }
-}
-
-function getApiFootballUsage() {
-  const today = toDateInputValue(new Date());
-  if (state.apiUsageDate !== today) {
-    state.apiUsageDate = today;
-    state.apiRequestsToday = 0;
-  }
-  return state.apiRequestsToday;
-}
-
-function registrarApiFootballRequest() {
-  getApiFootballUsage();
-  state.apiRequestsToday += 1;
 }
 
 function setBusy(isBusy, message = "") {
@@ -1481,7 +1208,7 @@ function buildSources(game, summary, availability, h2h) {
   const hasLineup = availability?.home?.starters?.length || availability?.away?.starters?.length;
   const hasInjuries = availability?.home?.injuries?.length || availability?.away?.injuries?.length;
   const hasPerformance = availability?.home?.topPerformance?.length || availability?.away?.topPerformance?.length;
-  return [game.apiGame ? "API-Football" : "", game.espnEvent ? "ESPN" : "", summary?.provider || "", h2h?.available ? "H2H" : "", hasLineup ? "Lineups" : "", hasInjuries ? "Bajas" : "", hasPerformance ? "Rendimiento" : ""]
+  return [game.espnEvent ? "ESPN" : "", summary?.provider || "", h2h?.available ? "H2H" : "", hasLineup ? "Lineups" : "", hasInjuries ? "Bajas" : "", hasPerformance ? "Rendimiento" : ""]
     .flatMap((item) => item.split(" + "))
     .filter(Boolean)
     .filter((item, index, arr) => arr.indexOf(item) === index);
@@ -1522,7 +1249,7 @@ function renderLineupDetail(lineup = {}) {
   const injuries = (lineup.injuries || []).slice(0, 4).map((player) => `${player.name}${player.reason ? ` (${player.reason})` : ""}`);
   const topPlayers = (lineup.topPerformance || []).slice(0, 4).map((player) => `${player.name} ${Math.round(player.score * 100)}%`);
   if (!starters.length && !injuries.length && !topPlayers.length) {
-    return `<p class="mt-4 rounded-lg bg-slate-50 p-3 text-xs font-semibold text-slate-500">Alineacion oficial y rendimiento de jugadores no publicados por API-Football.</p>`;
+    return `<p class="mt-4 rounded-lg bg-slate-50 p-3 text-xs font-semibold text-slate-500">Alineacion oficial y rendimiento de jugadores no publicados por la fuente disponible.</p>`;
   }
   return `
     <div class="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">
