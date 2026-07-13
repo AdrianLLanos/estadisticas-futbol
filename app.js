@@ -672,9 +672,9 @@ async function fetchEspnLeagues() {
   const response = await fetch(url);
   if (!response.ok) throw new Error('No se pudo obtener la lista de ligas de ESPN');
   const data = await response.json();
-  const leagues = (data.leagues || []).map((l) => ({ slug: l.slug || l.uid || l.abbreviation || l.id, label: l.name || l.abbreviation || l.displayName || l.slug }));
-  // Keep only entries with a usable slug
-  state.espnLeagues = leagues.filter((l) => l.slug);
+  // Prefer explicit `slug` values returned by the API. Ignore entries without a proper slug
+  const leagues = (data.leagues || []).filter((l) => l && l.slug).map((l) => ({ slug: l.slug, label: l.name || l.abbreviation || l.displayName || l.slug }));
+  state.espnLeagues = leagues;
   return state.espnLeagues;
 }
 
