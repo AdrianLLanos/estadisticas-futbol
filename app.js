@@ -513,30 +513,46 @@ function calcularProbabilidadesFinales({ homeGoals, awayGoals, homeComposite, aw
 
   const baseHome = clamp(0.5 + goalGap * 0.22 + compositeGap * 0.16, 0.08, 0.9);
   const baseAway = clamp(0.5 - goalGap * 0.22 - compositeGap * 0.16, 0.08, 0.9);
-  const baseDraw = clamp(1 - baseHome - baseAway, 0.08, 0.42);
+  // Reduce tendency to favor draws: make draw weight smaller and allow transfer
+  const baseDraw = clamp(1 - baseHome - baseAway, 0.03, 0.35);
 
   const homeWin = clamp(
     baseHome * 0.55 + numberOr(matrix.homeWinProb, 0.33) * 0.3 + (homeGoalExpectation / (homeGoalExpectation + awayGoalExpectation || 1)) * 0.15,
-    0.08,
-    0.9
+    0.03,
+    0.92
   );
   const awayWin = clamp(
     baseAway * 0.55 + numberOr(matrix.awayWinProb, 0.33) * 0.3 + (awayGoalExpectation / (homeGoalExpectation + awayGoalExpectation || 1)) * 0.15,
-    0.08,
-    0.9
+    0.03,
+    0.92
   );
   const draw = clamp(
-    numberOr(matrix.drawProb, 0.3) * 0.45 + baseDraw * 0.35 + (1 - Math.abs(goalGap) / 2.4) * 0.2,
-    0.08,
+    numberOr(matrix.drawProb, 0.3) * 0.3 + baseDraw * 0.25 + (1 - Math.abs(goalGap) / 2.4) * 0.15,
+    0.03,
     0.42
   );
 
-  const total = homeWin + draw + awayWin || 1;
-  const normalized = {
-    home: homeWin / total,
-    draw: draw / total,
-    away: awayWin / total,
-  };
+  let total = homeWin + draw + awayWin || 1;
+    const normalized = { 
+      home: homeWin / total, 
+      draw: draw / total, 
+      away: awayWin / total 
+    };
+  // If draw is the top pick but only slightly above the next, nudge a small portion to the stronger team
+  const maxNonDraw = Math.max(normalized.home, normalized.away);
+  if (normalized.draw > maxNonDraw && normalized.draw - maxNonDraw < 0.03) {
+    const transfer = (normalized.draw - maxNonDraw) * 0.6; // move 60% of the tiny draw advantage
+    if (normalized.home > normalized.away) {
+      normalized.home += transfer;
+    } else {
+      normalized.away += transfer;
+    }
+    normalized.draw = Math.max(0.01, normalized.draw - transfer);
+    total = normalized.home + normalized.draw + normalized.away || 1;
+    normalized.home /= total;
+    normalized.draw /= total;
+    normalized.away /= total;
+  }
   const favorite = normalized.home >= normalized.away && normalized.home >= normalized.draw
     ? "home"
     : normalized.away >= normalized.draw
