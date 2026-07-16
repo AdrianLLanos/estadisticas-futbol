@@ -1,32 +1,6 @@
-const ESPN_BATCH_SIZE = 5;
 const DIXON_COLES_RHO = -0.08;
 const RECENT_MATCH_LIMIT = 10;
-const RECENT_FETCH_LIMIT = 30;
 const H2H_MATCH_LIMIT = 10;
-
-const FOOTBALL_LEAGUES = [
-  { slug: "fifa.world", label: "FIFA" },
-  { slug: "fifa.worldcup", label: "Copa Mundial" },
-  { slug: "fifa.friendly", label: "Amistosos internacionales" },
-  { slug: "fifa.worldq", label: "Eliminatorias mundialistas" },
-  { slug: "uefa.euro", label: "Eurocopa" },
-  { slug: "uefa.nations", label: "UEFA Nations League" },
-  { slug: "uefa.champions", label: "Champions League" },
-  { slug: "uefa.europa", label: "Europa League" },
-  { slug: "uefa.euroq", label: "Clasificatorios Eurocopa" },
-  { slug: "eng.1", label: "Premier League" },
-  { slug: "esp.1", label: "LaLiga" },
-  { slug: "ita.1", label: "Serie A" },
-  { slug: "ger.1", label: "Bundesliga" },
-  { slug: "fra.1", label: "Ligue 1" },
-  { slug: "conmebol.libertadores", label: "Libertadores" },
-  { slug: "conmebol.sudamericana", label: "Sudamericana" },
-  { slug: "conmebol.copa", label: "Copa America" },
-  { slug: "conmebol.recopa", label: "Recopa" },
-  { slug: "concacaf.goldcup", label: "Copa Oro" },
-  { slug: "concacaf.nations", label: "Concacaf Nations League" },
-  { slug: "concacaf.champions", label: "Concacaf Champions Cup" },
-];
 
 const LEAGUE = {
   goalsPerTeam: 1.35,
@@ -45,7 +19,6 @@ const LEAGUE = {
 const state = {
   games: [],
   selectedId: null,
-  espnLeagues: null,
   forebetData: null,
 };
 
@@ -68,12 +41,6 @@ const els = {
 
 document.addEventListener("DOMContentLoaded", () => {
   els.dateInput.value = toDateInputValue(new Date());
-  FOOTBALL_LEAGUES.forEach((league) => {
-    const option = document.createElement("option");
-    option.value = league.slug;
-    option.textContent = league.label;
-    els.leagueFilter.appendChild(option);
-  });
   els.loadBtn.addEventListener("click", loadSlate);
   els.leagueFilter.addEventListener("change", renderGames);
   els.compareBtn.addEventListener("click", compareSelectedGame);
@@ -93,77 +60,166 @@ function parseForebetDate(dateStr) {
   return new Date(year, month, day, hour, minute);
 }
 
-async function loadForebetData() {
-  try {
-    const response = await fetch('./forebet_data.json');
-    if (response.ok) {
-      state.forebetData = await response.json();
-      console.log('Forebet data loaded successfully:', state.forebetData);
-    } else {
-      console.warn('forebet_data.json no encontrado o inaccesible.');
-    }
-  } catch (error) {
-    console.error('Error al cargar forebet_data.json:', error);
-  }
+function normalizeForebetGame(fb) {
+  const date = parseForebetDate(fb.dateStr) || new Date();
+  const id = `fb-${normalizeText(fb.homeTeam)}-${normalizeText(fb.awayTeam)}-${fb.dateStr}`;
+  return {
+    id,
+    date: date.toISOString(),
+    league: fb.leagueFull || fb.leagueShort || "Liga",
+    leagueSlug: (fb.leagueFull || fb.leagueShort || "liga").toLowerCase().replace(/\s+/g, "-"),
+    provider: "Forebet",
+    home: { name: fb.homeTeam, logo: "", homeAway: "home" },
+    away: { name: fb.awayTeam, logo: "", homeAway: "away" },
+    status: "Programado",
+    espnEvent: null,
+    forebetMatch: fb,
+  };
 }
 
-function findForebetMatch(espnGame) {
-  if (!state.forebetData || !state.forebetData.matches || !espnGame) return null;
-  return state.forebetData.matches.find(forebetGame => {
-    const sameHomeAway = sameTeam(espnGame.home.name, forebetGame.homeTeam) && sameTeam(espnGame.away.name, forebetGame.awayTeam);
-    const inverted = sameTeam(espnGame.home.name, forebetGame.awayTeam) && sameTeam(espnGame.away.name, forebetGame.homeTeam);
-    
-    if (sameHomeAway || inverted) {
-      const forebetDate = parseForebetDate(forebetGame.dateStr);
-      if (forebetDate && sameLocalDate(espnGame.date, forebetDate)) {
-        return true;
+function buildContextFromForebet(team, forebetGame) {
+  const isHome = team.homeAway === "home";
+  const avgGoals = forebetGame.avgGoals || LEAGUE.goalsPerGame;
+
+  // Derive goals from predicted correct score when available
+  let predictedHome = null, predictedAway = null;
+  if (forebetGame.correctScore) {
+    const parts = forebetGame.correctScore.replace(/\s/g, "").split("-");
+    if (parts.length === 2) {
+      const h = parseInt(parts[0], 10);
+      const a = parseInt(parts[1], 10);
+      if (Number.isFinite(h) && Number.isFinite(a)) {
+        predictedHome = h;
+        predictedAway = a;
       }
     }
-    return false;
+  }
+
+  // Goals per team based on correct score or split avgGoals by prob weight
+  const probH = (forebetGame.probabilities?.home || 33) / 100;
+  const probA = (forebetGame.probabilities?.away || 33) / 100;
+  const probD = (forebetGame.probabilities?.draw || 34) / 100;
+  const totalProb = probH + probA + probD || 1;
+  const normH = probH / totalProb;
+  const normA = probA / totalProb;
+
+  const homeGoals = predictedHome !== null ? predictedHome : Math.max(0.3, avgGoals * normH * 1.5);
+  const awayGoals = predictedAway !== null ? predictedAway : Math.max(0.3, avgGoals * normA * 1.5);
+
+  const gf = isHome ? homeGoals : awayGoals;
+  const ga = isHome ? awayGoals : homeGoals;
+
+  const winRate = isHome ? normH : normA;
+  const drawRate = clamp(probD, 0.05, 0.55);
+  const pointsPerGame = winRate * 3 + drawRate;
+  const cleanSheetRate = clamp(1 - (ga / 2.5), 0.05, 0.7);
+  const conversionRate = gf > 0 ? clamp(gf / (gf * 6), 0.06, 0.28) : 0.12;
+
+  const ctx = {
+    name: team.name,
+    logo: team.logo || "",
+    games: 10,
+    goalsForPerGame: gf,
+    goalsAgainstPerGame: ga,
+    goalDiffPerGame: gf - ga,
+    winRate,
+    drawRate,
+    pointsPerGame,
+    cleanSheetRate,
+    conversionRate,
+    shotsPerGame: LEAGUE.shotsPerTeam * (0.85 + winRate * 0.35),
+    shotsOnTargetPerGame: LEAGUE.shotsOnTargetPerTeam * (0.85 + winRate * 0.35),
+    cornersPerGame: LEAGUE.cornersPerTeam * (0.85 + normH * 0.3),
+    shotsAgainstPerGame: LEAGUE.shotsPerTeam * (1.15 - winRate * 0.3),
+    shotsOnTargetAgainstPerGame: LEAGUE.shotsOnTargetPerTeam * (1.15 - winRate * 0.3),
+    homeWinRate: isHome ? winRate : 0.28,
+    awayWinRate: isHome ? 0.28 : winRate,
+    venueLabel: isHome ? "local" : "visitante",
+    venueStats: {
+      games: 5,
+      goalsForPerGame: gf,
+      goalsAgainstPerGame: ga,
+      goalDiffPerGame: gf - ga,
+      winRate,
+      drawRate,
+      pointsPerGame,
+      cleanSheetRate,
+      conversionRate,
+    },
+    recent: [],
+  };
+  return ctx;
+}
+
+function populateLeagueFilter(matches) {
+  // Reset to only the "All leagues" option
+  els.leagueFilter.innerHTML = '<option value="all">Todas las ligas</option>';
+  const seen = new Set();
+  matches.forEach(m => {
+    const slug = (m.leagueFull || m.leagueShort || "liga").toLowerCase().replace(/\s+/g, "-");
+    const label = m.leagueFull || m.leagueShort || "Liga";
+    if (!seen.has(slug)) {
+      seen.add(slug);
+      const opt = document.createElement("option");
+      opt.value = slug;
+      opt.textContent = label;
+      els.leagueFilter.appendChild(opt);
+    }
   });
 }
 
 async function loadSlate() {
-  setBusy(true, "Cargando partidos de futbol...");
+  setBusy(true, "Cargando jornada de Forebet...");
   clearResults();
 
   try {
-    await loadForebetData();
-    const date = els.dateInput.value || toDateInputValue(new Date());
-    let espnResult = await cargarJuegosEspnFutbolPorFecha(date);
-    let espnGames = Array.isArray(espnResult?.events) ? espnResult.events : [];
-    
-    // If ESPN returned no games for the selected date, try nearby dates (±2 days)
-    if (!espnGames.length) {
-      const offsets = [-2, -1, 1, 2];
-      for (let i = 0; i < offsets.length && !espnGames.length; i++) {
-        const d = new Date(date);
-        d.setDate(d.getDate() + offsets[i]);
-        const tryDate = toDateInputValue(d);
-        const tryResult = await cargarJuegosEspnFutbolPorFecha(tryDate);
-        espnGames = Array.isArray(tryResult?.events) ? tryResult.events : [];
-        if (espnGames.length) {
-          setStatus(`No hay partidos en ${date}. Usando ${tryDate} como alternativa.`, "warn");
-          espnResult = tryResult;
-          break;
-        }
+    const response = await fetch('./forebet_data.json');
+    if (!response.ok) throw new Error("No se pudo cargar forebet_data.json. Ejecuta: node scrape-forebet.js");
+    state.forebetData = await response.json();
+
+    const selectedDate = els.dateInput.value || toDateInputValue(new Date());
+    const allMatches = state.forebetData.matches || [];
+
+    // Filter by selected date
+    let filtered = allMatches.filter(m => {
+      const d = parseForebetDate(m.dateStr);
+      return d && toDateInputValue(d) === selectedDate;
+    });
+
+    // If no matches for that date, show all available
+    if (!filtered.length) {
+      filtered = allMatches;
+      if (allMatches.length) {
+        const dates = [...new Set(allMatches.map(m => {
+          const d = parseForebetDate(m.dateStr);
+          return d ? toDateInputValue(d) : null;
+        }).filter(Boolean))];
+        setStatus(`No hay partidos para ${selectedDate}. Mostrando ${filtered.length} partidos de: ${dates.join(", ")}. Ejecuta scrape-forebet.js para actualizar.`, "warn");
       }
     }
-    state.games = mergeFootballGames([], espnGames).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    // Populate league selector dynamically
+    populateLeagueFilter(filtered);
+
+    state.games = filtered
+      .map(normalizeForebetGame)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
     state.selectedId = state.games[0]?.id || null;
 
     renderGames();
     renderMatchupHeader(getSelectedGame());
     els.compareBtn.disabled = !state.selectedId;
-    const attempted = espnResult?.attempted || 0;
-    const leaguesWithEvents = espnResult?.leaguesWithEvents || 0;
-    els.sourceStatus.textContent = `ESPN ${espnGames.length} partidos — consultadas ${attempted} ligas (${leaguesWithEvents} con partidos)`;
+
+    const scrapedAt = state.forebetData.scrapedAt
+      ? new Date(state.forebetData.scrapedAt).toLocaleString()
+      : "desconocido";
+    els.sourceStatus.textContent = `${state.games.length} partidos — scrapeado: ${scrapedAt}`;
 
     if (!state.games.length) {
-      setStatus("No se encontraron partidos para la fecha seleccionada.", "warn");
+      setStatus("No se encontraron partidos. Ejecuta: node scrape-forebet.js", "warn");
       return;
     }
-    setStatus(`${state.games.length} partidos cargados. Selecciona uno para comparar.`, "ok");
+    setStatus(`${state.games.length} partidos cargados desde Forebet. Selecciona uno para comparar.`, "ok");
   } catch (error) {
     state.games = [];
     state.selectedId = null;
@@ -334,11 +390,10 @@ function buildProjection({ game, homeContext, awayContext, summary, availability
     confidence: calcularConfianza({ diff: Math.abs(diff), winProbability: probability.value, homeScore: probability.homeComposite, awayScore: probability.awayComposite }),
     sources: (() => {
       const src = buildSources(game, summary, availability, h2h);
-      const fMatch = findForebetMatch(game);
-      if (fMatch) src.push("Forebet");
+      if (game.forebetMatch) src.push("Forebet");
       return src;
     })(),
-    forebetMatch: findForebetMatch(game),
+    forebetMatch: game.forebetMatch || null,
   };
 }
 
@@ -996,6 +1051,10 @@ async function cargarResumenEspn(event) {
 }
 
 async function getTeamContext(team, game) {
+  // Prefer Forebet-derived context when available
+  if (game?.forebetMatch) {
+    return buildContextFromForebet(team, game.forebetMatch);
+  }
   return buildFallbackContext(team, game);
 }
 
@@ -1256,9 +1315,10 @@ function renderSummary(model) {
   ];
   if (model.forebetMatch) {
     const fm = model.forebetMatch;
-    const forebetFavorite = fm.prediction === "1" ? model.game.home.name : fm.prediction === "2" ? model.game.away.name : "Empate";
-    const maxProb = Math.max(fm.probabilities.home || 0, fm.probabilities.draw || 0, fm.probabilities.away || 0);
-    cards.push(["Predicción Forebet", `${forebetFavorite} (${fm.correctScore || 'N/D'})`, `Probabilidad: ${maxProb}%`]);
+    const fbTip = fm.prediction === "1" ? model.game.home.name : fm.prediction === "2" ? model.game.away.name : "Empate";
+    const maxProb = Math.max(fm.probabilities?.home || 0, fm.probabilities?.draw || 0, fm.probabilities?.away || 0);
+    const oddsStr = fm.odds?.home ? `Cuotas: ${fm.odds.home} / ${fm.odds.draw} / ${fm.odds.away}` : `1: ${fm.probabilities?.home}% X: ${fm.probabilities?.draw}% 2: ${fm.probabilities?.away}%`;
+    cards.push(["⚽ Forebet Tip", `${fbTip} — ${fm.correctScore || "N/D"}`, `${maxProb}% confianza · ${oddsStr}`]);
   }
   els.summaryGrid.innerHTML = cards.map(([label, value, meta]) => `
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
