@@ -1,0 +1,593 @@
+{
+  "scrapedAt": "2026-07-16T00:14:08.793Z",
+  "matches": [
+    {
+      "leagueShort": "WC",
+      "leagueFull": "World Cup",
+      "homeTeam": "England",
+      "awayTeam": "Argentina",
+      "dateStr": "15/07/2026 15:00",
+      "probabilities": {
+        "home": 31,
+        "draw": 37,
+        "away": 32
+      },
+      "prediction": "X",
+      "correctScore": "1-1",
+      "avgGoals": 1.75,
+      "temp": "32°",
+      "odds": {
+        "home": 2.62,
+        "draw": 2.88,
+        "away": 3.1
+      }
+    },
+    {
+      "leagueShort": "UCL",
+      "leagueFull": "Champions League",
+      "homeTeam": "CS Univ Craiova",
+      "awayTeam": "MKK-Dnepr",
+      "dateStr": "15/07/2026 13:30",
+      "probabilities": {
+        "home": 43,
+        "draw": 21,
+        "away": 36
+      },
+      "prediction": "1",
+      "correctScore": "3-1",
+      "avgGoals": 3.45,
+      "temp": "33°",
+      "odds": {
+        "home": 1.3,
+        "draw": 4.75,
+        "away": 9
+      }
+    },
+    {
+      "leagueShort": "UCL",
+      "leagueFull": "Champions League",
+      "homeTeam": "FC Atert Bissen",
+      "awayTeam": "Klaksvik",
+      "dateStr": "15/07/2026 14:15",
+      "probabilities": {
+        "home": 24,
+        "draw": 36,
+        "away": 40
+      },
+      "prediction": "2",
+      "correctScore": "1-4",
+      "avgGoals": 2.73,
+      "temp": "28°",
+      "odds": {
+        "home": 2.05,
+        "draw": 3.6,
+        "away": 2.8
+      }
+    },
+    {
+      "leagueShort": "UCL",
+      "leagueFull": "Champions League",
+      "homeTeam": "Sutjeska Niksic",
+      "awayTeam": "Kairat Almaty",
+      "dateStr": "15/07/2026 15:00",
+      "probabilities": {
+        "home": 27,
+        "draw": 22,
+        "away": 51
+      },
+      "prediction": "2",
+      "correctScore": "1-3",
+      "avgGoals": 2.77,
+      "temp": "32°",
+      "odds": {
+        "home": 4.2,
+        "draw": 4,
+        "away": 1.6
+      }
+    },
+    {
+      "leagueShort": "UCL",
+      "leagueFull": "Champions League",
+      "homeTeam": "Egnatia Rrogozhine",
+      "awayTeam": "Petrocub",
+      "dateStr": "15/07/2026 15:00",
+      "probabilities": {
+        "home": 33,
+        "draw": 43,
+        "away": 24
+      },
+      "prediction": "X",
+      "correctScore": "1-1",
+      "avgGoals": 1.52,
+      "temp": "32°",
+      "odds": {
+        "home": 1.67,
+        "draw": 3.4,
+        "away": 4.75
+      }
+    },
+    {
+      "leagueShort": "Bo1",
+      "leagueFull": "Bo1",
+      "homeTeam": "Real Potosí",
+      "awayTeam": "CD San Antonio (BOL)",
+      "dateStr": "15/07/2026 18:00",
+      "probabilities": {
+        "home": 45,
+        "draw": 31,
+        "away": 24
+      },
+      "prediction": "1",
+      "correctScore": "2-0",
+      "avgGoals": 1.5,
+      "temp": "13°",
+      "odds": {
+        "home": 1.5,
+        "draw": 4.2,
+        "away": 5.5
+      }
+    },
+    {
+      "leagueShort": "Bo1",
+      "leagueFull": "Bo1",
+      "homeTeam": "The Strongest",
+      "awayTeam": "Oriente Petrolero",
+      "dateStr": "15/07/2026 20:00",
+      "probabilities": {
+        "home": 66,
+        "draw": 23,
+        "away": 11
+      },
+      "prediction": "1",
+      "correctScore": "2-0",
+      "avgGoals": 2.48,
+      "temp": "11°",
+      "odds": {
+        "home": 1.22,
+        "draw": 6,
+        "away": 9.5
+      }
+    },
+    {
+      "leagueShort": "ECL",
+      "leagueFull": "Liga Europa Conferencia de la UEFA",
+      "homeTeam": "KF Malisheva",
+      "awayTeam": "Vllaznia Shkodër",
+      "dateStr": "15/07/2026 10:30",
+      "probabilities": {
+        "home": 28,
+        "draw": 29,
+        "away": 43
+      },
+      "prediction": "2",
+      "correctScore": "1-2",
+      "avgGoals": 2.92,
+      "temp": "30°",
+      "odds": {
+        "home": 1.65,
+        "draw": 3.75,
+        "away": 4.1
+      }
+    },
+    {
+      "leagueShort": "ECL",
+      "leagueFull": "Liga Europa Conferencia de la UEFA",
+      "homeTeam": "Decic Tuzi",
+      "awayTeam": "FK Liepaja",
+      "dateStr": "15/07/2026 14:30",
+      "probabilities": {
+        "home": 33,
+        "draw": 32,
+        "away": 35
+      },
+      "prediction": "2",
+      "correctScore": "0-1",
+      "avgGoals": 1.78,
+      "temp": "32°",
+      "odds": {
+        "home": 2.45,
+        "draw": 3.4,
+        "away": 2.55
+      }
+    },
+    {
+      "leagueShort": "Fi2",
+      "leagueFull": "Fi2",
+      "homeTeam": "JIPPO Joensuu",
+      "awayTeam": "MP Mikkeli",
+      "dateStr": "15/07/2026 11:30",
+      "probabilities": {
+        "home": 37,
+        "draw": 39,
+        "away": 23
+      },
+      "prediction": "X",
+      "correctScore": "1-1",
+      "avgGoals": 2,
+      "temp": "21°",
+      "odds": {
+        "home": 1.45,
+        "draw": 4.33,
+        "away": 4.75
+      }
+    },
+    {
+      "leagueShort": "Fi3",
+      "leagueFull": "Fi3",
+      "homeTeam": "GBK Kokkola",
+      "awayTeam": "Närpes Kraft",
+      "dateStr": "15/07/2026 11:30",
+      "probabilities": {
+        "home": 44,
+        "draw": 13,
+        "away": 43
+      },
+      "prediction": "1",
+      "correctScore": "3-2",
+      "avgGoals": 4.54,
+      "temp": "18°",
+      "odds": {
+        "home": 1.91,
+        "draw": 4.33,
+        "away": 2.75
+      }
+    },
+    {
+      "leagueShort": "Fi3",
+      "leagueFull": "Fi3",
+      "homeTeam": "GBK Kokkola",
+      "awayTeam": "Närpes Kraft",
+      "dateStr": "15/07/2026 11:30",
+      "probabilities": {
+        "home": 46,
+        "draw": 13,
+        "away": 41
+      },
+      "prediction": "1",
+      "correctScore": "3-2",
+      "avgGoals": 4.54,
+      "temp": "18°",
+      "odds": {
+        "home": 1.91,
+        "draw": 4.33,
+        "away": 2.75
+      }
+    },
+    {
+      "leagueShort": "IsW",
+      "leagueFull": "IsW",
+      "homeTeam": "ÍBV W",
+      "awayTeam": "Valur W",
+      "dateStr": "15/07/2026 14:00",
+      "probabilities": {
+        "home": 31,
+        "draw": 36,
+        "away": 33
+      },
+      "prediction": "X",
+      "correctScore": "2-2",
+      "avgGoals": 3.1,
+      "temp": "11°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "IsW",
+      "leagueFull": "IsW",
+      "homeTeam": "Breidablik W",
+      "awayTeam": "Víkingur Reykjavík W",
+      "dateStr": "15/07/2026 15:15",
+      "probabilities": {
+        "home": 60,
+        "draw": 15,
+        "away": 25
+      },
+      "prediction": "1",
+      "correctScore": "3-2",
+      "avgGoals": 4.92,
+      "temp": "14°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "Jaragua",
+      "awayTeam": "Nação",
+      "dateStr": "15/07/2026 14:00",
+      "probabilities": {
+        "home": 19,
+        "draw": 32,
+        "away": 49
+      },
+      "prediction": "2",
+      "correctScore": "0-2",
+      "avgGoals": 2.17,
+      "temp": "33°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "Fluminense SC",
+      "awayTeam": "SERC Guarani SC",
+      "dateStr": "15/07/2026 14:00",
+      "probabilities": {
+        "home": 40,
+        "draw": 31,
+        "away": 29
+      },
+      "prediction": "1",
+      "correctScore": "1-0",
+      "avgGoals": 1.79,
+      "temp": "21°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "Blumenau",
+      "awayTeam": "Metropolitano SC",
+      "dateStr": "15/07/2026 14:00",
+      "probabilities": {
+        "home": 31,
+        "draw": 27,
+        "away": 42
+      },
+      "prediction": "2",
+      "correctScore": "0-1",
+      "avgGoals": 1.96,
+      "temp": "",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "Olaria RJ",
+      "awayTeam": "Bangu RJ",
+      "dateStr": "15/07/2026 13:45",
+      "probabilities": {
+        "home": 36,
+        "draw": 34,
+        "away": 30
+      },
+      "prediction": "1",
+      "correctScore": "2-0",
+      "avgGoals": 1.75,
+      "temp": "23°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "Americano RJ",
+      "awayTeam": "Portuguesa RJ",
+      "dateStr": "15/07/2026 13:45",
+      "probabilities": {
+        "home": 45,
+        "draw": 29,
+        "away": 26
+      },
+      "prediction": "1",
+      "correctScore": "1-0",
+      "avgGoals": 1.95,
+      "temp": "20°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "America RJ",
+      "awayTeam": "Nova Iguacu RJ",
+      "dateStr": "15/07/2026 13:45",
+      "probabilities": {
+        "home": 32,
+        "draw": 33,
+        "away": 35
+      },
+      "prediction": "2",
+      "correctScore": "0-1",
+      "avgGoals": 1.66,
+      "temp": "22°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "Perolas Negras",
+      "awayTeam": "Marica RJ",
+      "dateStr": "15/07/2026 13:45",
+      "probabilities": {
+        "home": 27,
+        "draw": 44,
+        "away": 29
+      },
+      "prediction": "X",
+      "correctScore": "1-1",
+      "avgGoals": 2.35,
+      "temp": "20°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "Bonsucesso RJ",
+      "awayTeam": "Madureira RJ",
+      "dateStr": "15/07/2026 13:45",
+      "probabilities": {
+        "home": 36,
+        "draw": 42,
+        "away": 22
+      },
+      "prediction": "X",
+      "correctScore": "0-0",
+      "avgGoals": 2.45,
+      "temp": "21°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "BrC",
+      "leagueFull": "BrC",
+      "homeTeam": "CEAC Araruama",
+      "awayTeam": "Boavista RJ",
+      "dateStr": "15/07/2026 15:00",
+      "probabilities": {
+        "home": 22,
+        "draw": 41,
+        "away": 37
+      },
+      "prediction": "X",
+      "correctScore": "1-1",
+      "avgGoals": 1.25,
+      "temp": "21°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "Ec1",
+      "leagueFull": "Ec1",
+      "homeTeam": "Libertad FC (ECU)",
+      "awayTeam": "Tecnico",
+      "dateStr": "15/07/2026 13:00",
+      "probabilities": {
+        "home": 35,
+        "draw": 27,
+        "away": 39
+      },
+      "prediction": "2",
+      "correctScore": "1-2",
+      "avgGoals": 3.11,
+      "temp": "23°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "Ec2",
+      "leagueFull": "Ec2",
+      "homeTeam": "Cuniburo",
+      "awayTeam": "El Nacional Quito",
+      "dateStr": "15/07/2026 15:30",
+      "probabilities": {
+        "home": 60,
+        "draw": 21,
+        "away": 19
+      },
+      "prediction": "1",
+      "correctScore": "2-1",
+      "avgGoals": 2.79,
+      "temp": "19°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "KzC",
+      "leagueFull": "KzC",
+      "homeTeam": "Ordabasy",
+      "awayTeam": "Altai Semey",
+      "dateStr": "15/07/2026 11:00",
+      "probabilities": {
+        "home": 50,
+        "draw": 29,
+        "away": 21
+      },
+      "prediction": "1",
+      "correctScore": "1-0",
+      "avgGoals": 1.25,
+      "temp": "41°",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "PlC",
+      "leagueFull": "PlC",
+      "homeTeam": "Lech Poznan",
+      "awayTeam": "Gornik Zabrze",
+      "dateStr": "16/07/2026 13:00",
+      "probabilities": {
+        "home": null,
+        "draw": null,
+        "away": null
+      },
+      "prediction": "X",
+      "correctScore": "",
+      "avgGoals": null,
+      "temp": "",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    },
+    {
+      "leagueShort": "Mx1",
+      "leagueFull": "Mx1",
+      "homeTeam": "Club Necaxa",
+      "awayTeam": "Atlante FC",
+      "dateStr": "16/07/2026 21:00",
+      "probabilities": {
+        "home": null,
+        "draw": null,
+        "away": null
+      },
+      "prediction": "1",
+      "correctScore": "",
+      "avgGoals": null,
+      "temp": "",
+      "odds": {
+        "home": null,
+        "draw": null,
+        "away": null
+      }
+    }
+  ]
+}

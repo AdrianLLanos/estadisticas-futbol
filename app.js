@@ -46,6 +46,7 @@ const state = {
   games: [],
   selectedId: null,
   espnLeagues: null,
+  forebetData: null,
 };
 
 const els = {
@@ -80,11 +81,54 @@ document.addEventListener("DOMContentLoaded", () => {
   loadSlate();
 });
 
+function parseForebetDate(dateStr) {
+  if (!dateStr) return null;
+  const parts = dateStr.split(/[\/\s:]/);
+  if (parts.length < 5) return null;
+  const day = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  const year = parseInt(parts[2], 10);
+  const hour = parseInt(parts[3], 10);
+  const minute = parseInt(parts[4], 10);
+  return new Date(year, month, day, hour, minute);
+}
+
+async function loadForebetData() {
+  try {
+    const response = await fetch('./forebet_data.json');
+    if (response.ok) {
+      state.forebetData = await response.json();
+      console.log('Forebet data loaded successfully:', state.forebetData);
+    } else {
+      console.warn('forebet_data.json no encontrado o inaccesible.');
+    }
+  } catch (error) {
+    console.error('Error al cargar forebet_data.json:', error);
+  }
+}
+
+function findForebetMatch(espnGame) {
+  if (!state.forebetData || !state.forebetData.matches || !espnGame) return null;
+  return state.forebetData.matches.find(forebetGame => {
+    const sameHomeAway = sameTeam(espnGame.home.name, forebetGame.homeTeam) && sameTeam(espnGame.away.name, forebetGame.awayTeam);
+    const inverted = sameTeam(espnGame.home.name, forebetGame.awayTeam) && sameTeam(espnGame.away.name, forebetGame.homeTeam);
+    
+    if (sameHomeAway || inverted) {
+      const forebetDate = parseForebetDate(forebetGame.dateStr);
+      if (forebetDate && sameLocalDate(espnGame.date, forebetDate)) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
 async function loadSlate() {
   setBusy(true, "Cargando partidos de futbol...");
   clearResults();
 
   try {
+    await loadForebetData();
     const date = els.dateInput.value || toDateInputValue(new Date());
     let espnResult = await cargarJuegosEspnFutbolPorFecha(date);
     let espnGames = Array.isArray(espnResult?.events) ? espnResult.events : [];
@@ -288,7 +332,13 @@ function buildProjection({ game, homeContext, awayContext, summary, availability
     cornersLean,
     cardsLean,
     confidence: calcularConfianza({ diff: Math.abs(diff), winProbability: probability.value, homeScore: probability.homeComposite, awayScore: probability.awayComposite }),
-    sources: buildSources(game, summary, availability, h2h),
+    sources: (() => {
+      const src = buildSources(game, summary, availability, h2h);
+      const fMatch = findForebetMatch(game);
+      if (fMatch) src.push("Forebet");
+      return src;
+    })(),
+    forebetMatch: findForebetMatch(game),
   };
 }
 
@@ -1204,6 +1254,12 @@ function renderSummary(model) {
     ["Tarjetas", model.cardsLean, `Total ${model.totalCards}`],
     ["BTTS", model.bttsLean, `${Math.round(p.btts * 100)}%`],
   ];
+  if (model.forebetMatch) {
+    const fm = model.forebetMatch;
+    const forebetFavorite = fm.prediction === "1" ? model.game.home.name : fm.prediction === "2" ? model.game.away.name : "Empate";
+    const maxProb = Math.max(fm.probabilities.home || 0, fm.probabilities.draw || 0, fm.probabilities.away || 0);
+    cards.push(["Predicción Forebet", `${forebetFavorite} (${fm.correctScore || 'N/D'})`, `Probabilidad: ${maxProb}%`]);
+  }
   els.summaryGrid.innerHTML = cards.map(([label, value, meta]) => `
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
       <p class="text-xs font-bold uppercase tracking-wide text-slate-500">${escapeHtml(label)}</p>
@@ -1259,6 +1315,15 @@ function renderResults(model) {
     ["Rendimiento jugadores", `${model.awayLineup.performanceLabel} / ${model.homeLineup.performanceLabel}`, `${scorePercent(model.awayLineup.performanceScore)} - ${scorePercent(model.homeLineup.performanceScore)}`, performanceConfidence(model), "Rating, minutos, goles/asistencias, defensa y disciplina"],
     ["Ambos anotan", model.bttsLean, `Si ${pct(p.btts)} | No ${pct(1 - p.btts)}`, confidenceFromProb(Math.max(p.btts, 1 - p.btts)), "Poisson con goles esperados de ambos equipos"],
     ["Marcador probable", model.matrix.topScores.map((s) => `${s.a}-${s.h}`).join(" / "), `${model.awayGoals.toFixed(2)}-${model.homeGoals.toFixed(2)}`, "Media", "Marcadores ordenados por probabilidad"],
+    ...(model.forebetMatch ? [
+      [
+        "Forebet Pronóstico", 
+        model.forebetMatch.prediction === "1" ? "Local" : model.forebetMatch.prediction === "2" ? "Visita" : "Empate",
+        model.forebetMatch.correctScore ? `Marcador: ${model.forebetMatch.correctScore}` : "N/D",
+        "Alta", 
+        `Probabilidades: Local ${model.forebetMatch.probabilities.home}% | Empate ${model.forebetMatch.probabilities.draw}% | Visita ${model.forebetMatch.probabilities.away}%`
+      ]
+    ] : []),
   ];
   els.resultsBody.innerHTML = rows.map(([market, pick, estimated, confidence, base]) => `
     <tr>
