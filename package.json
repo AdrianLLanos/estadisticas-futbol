@@ -1,0 +1,27 @@
+{
+  "name": "estadisticas-futbol",
+  "version": "1.0.0",
+  "description": "App estatica en HTML, Tailwind CSS y JavaScript para comparar equipos de futbol.",
+  "main": "app.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AdrianLLanos/estadisticas-futbol.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/AdrianLLanos/estadisticas-futbol/issues"
+  },
+  "homepage": "https://github.com/AdrianLLanos/estadisticas-futbol#readme",
+  "dependencies": {
+    "puppeteer": "^25.3.0"
+  }
+}
